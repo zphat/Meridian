@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101512">
+  <title>Meridian — Project Control Center</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="brand"><div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="currentColor" stroke-width="2"/><path d="M24 5v38M6 24h36M11 11l26 26M37 11 11 37" fill="none" stroke="currentColor" stroke-opacity=".37" stroke-width="1.2"/><circle cx="24" cy="24" r="4" fill="currentColor"/></svg></div><div><div class="brand-name">meridian<span class="brand-period">.</span></div><div class="brand-label">PROJECT CONTROL CENTER</div></div></div>
+      <div class="nav-group-label">WORKSPACE</div>
+      <nav class="sidebar-nav" id="main-nav"></nav>
+      <div class="side-bottom"><div class="side-rule"></div><div class="side-note"><div class="side-note-dot"></div><div><strong>Local-first</strong><span>Your notes stay on this computer</span></div></div><div class="side-foot">MERIDIAN 0.2.7 <span>·</span> PERSONAL EDITION</div></div>
+    </aside>
+    <div class="main-area">
+      <header class="topbar"><div class="topbar-start"><button class="icon-btn mobile-menu" id="menu-toggle" title="Toggle navigation" aria-label="Toggle navigation"></button><span class="crumb">WORKSPACE</span><span class="crumb-slash">/</span><span class="crumb-current" id="crumb-current">Overview</span></div><div class="topbar-end"><div class="sync-info" id="sync-info"></div><button class="refresh-button" id="refresh-button" title="Fetch live updates"><span id="refresh-ico"></span><span>Refresh</span></button></div></header>
+      <main class="page" id="page" aria-live="polite"><div class="loading-state"><div class="loading-circle"></div><p>Opening your workspace…</p></div></main>
+    </div>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast-root" role="status" aria-live="polite"></div>
+</body>
+</html>
