@@ -1,7 +1,29 @@
-# Meridian
+# Meridian 0.2.7
 
-Local-first development control center for Latitude, Longitude and Sundial. The application tracks GitHub builds/releases and downloads, website and Sundial sync health, a 48-hour probe history, project notes, decisions, prioritized goals, and copyable repair prompts.
+Local-first personal control center for Latitude, Longitude, and Sundial.
 
-**Version being prepared:** 0.2.7. The Windows installer is being built and verified separately. This repository is currently **private**; the unauthenticated GitHub Releases API used by the installed app cannot read private releases. The automatic update channel will require either a public release repository or authenticated update access. No user data is committed here.
+## What is new
 
-This README initializes the repository. Source and release workflow have not yet been uploaded, so it is not yet a working update channel.
+- Labeled green, amber, red monitoring lights with stale checks shown as unverified
+- Actual 48-hour hourly availability samples, not invented uptime
+- Per-project installer download totals and imported visitor counts
+- Smaller actionable goal lists and collapsible completed tasks
+- Copyable ChatGPT/Claude troubleshooting prompts using available monitoring evidence
+
+## Windows
+
+Run `Meridian-Setup-0.2.7.exe` (compiled, x64). It installs to your user profile with Start Menu and desktop links, and fetches a pinned, verified Python embeddable runtime during first installation. Requires internet at first install. It is not code signed.
+
+## GitHub updates
+
+The updater checks `zphat/Meridian` on startup and periodically. This repository is currently **private**. GitHub's public release endpoint cannot expose private assets to an unauthenticated installed app; update checks are not fully operational until a dedicated authenticated or public release feed is provided. Do not store a GitHub token inside distributed installation assets. The update checker shows a private/unpublished notice rather than claiming up-to-date.
+
+## Local project data
+
+Notes, goals, decisions, samples, downloads and snapshots are stored in the local user's `.meridian/meridian.sqlite3` and aren't shipped with builds or uploaded to GitHub. Back up data from Settings.
+
+## Development
+
+`python meridian.py --offline` to run without network; `python -m unittest discover -s tests` for backend tests. The local service defaults to loopback and may optionally be exposed via a carefully configured Tailscale Serve proxy.
+
+> Repository sync incomplete: frontend, packaging and test files are provided in the downloadable source archive but are not all committed. No build release is published yet.
