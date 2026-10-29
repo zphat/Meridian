@@ -1,0 +1,78 @@
+name: Build Meridian Windows installer
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Check source completeness
+        shell: pwsh
+        run: |
+          $needed=@("meridian.py","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go")
+          foreach($p in $needed){ if(!(Test-Path $p)){throw "Missing $p — do not publish incomplete installer."} }
+      - name: Test Python
+        run: python -m unittest discover -s tests -v
+      - name: Validate JavaScript
+        shell: pwsh
+        run: |
+          node --check static/app.js
+      - name: Build native Windows launcher
+        shell: pwsh
+        run: |
+          $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
+          Push-Location launcher-go
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian.exe .
+          Pop-Location
+      - name: Build embedded app archive
+        shell: pwsh
+        run: |
+          @'
+          from zipfile import ZipFile,ZIP_DEFLATED
+          from pathlib import Path
+          r=Path('.')
+          with ZipFile('installer-go/payload.zip','w',ZIP_DEFLATED,compresslevel=9) as z:
+              for f in ['meridian.py','Meridian.exe'] + [p.as_posix() for folder in ('assets','static') for p in (r/folder).rglob('*') if p.is_file()]:
+                  z.write(f,f)
+          '@ | python -
+      - name: Build installer executable
+        shell: pwsh
+        run: |
+          $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
+          Push-Location installer-go
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.7.exe .
+          Pop-Location
+      - name: Confirm installer PE format
+        shell: pwsh
+        run: |
+          $f=Get-Item Meridian-Setup-0.2.7.exe
+          if($f.Length -lt 1000000){throw "Installer unexpectedly small"}
+          $bytes=[IO.File]::ReadAllBytes($f.FullName)
+          if($bytes[0] -ne 77 -or $bytes[1] -ne 90){throw "Not a Windows PE executable"}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Meridian-Windows
+          path: Meridian-Setup-0.2.7.exe
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Meridian-Windows
+      - name: Publish versioned installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" Meridian-Setup-0.2.7.exe --repo "${{ github.repository }}" --title "Meridian ${{ github.ref_name }}" --generate-notes
