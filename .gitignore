@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.meridian/
+*.sqlite3*
+.env
+runtime/
+dist/
+*.exe
+*.zip
+*.png
