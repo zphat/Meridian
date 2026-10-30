@@ -24,6 +24,9 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from email.utils import parsedate_to_datetime
+# Python's Windows embedded distribution excludes the application directory from
+# sys.path, unlike a normal Python installation. Explicitly load bundled auth.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path

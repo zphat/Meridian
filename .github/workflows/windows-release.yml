@@ -81,7 +81,7 @@ jobs:
           }
           $py=Join-Path $root 'runtime/python.exe'
           $app=Join-Path $root 'meridian.py'
-          $proc=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','18765') -PassThru -WindowStyle Hidden
+          $proc=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','18765') -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'meridian-stdout.txt') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'meridian-stderr.txt')
           try {
             $healthy=$false
             for($i=0;$i -lt 45;$i++) {
@@ -91,7 +91,12 @@ jobs:
                 if ($h.ok -and $h.version -eq '0.2.8') {$healthy=$true;break}
               } catch {}
             }
-            if (-not $healthy) { throw 'Installed Meridian failed HTTP health check' }
+            if (-not $healthy) {
+              Write-Host 'Meridian embedded runtime diagnostics:'
+              Get-Content (Join-Path $env:RUNNER_TEMP 'meridian-stderr.txt') -ErrorAction SilentlyContinue
+              Get-Content (Join-Path $env:RUNNER_TEMP 'meridian-stdout.txt') -ErrorAction SilentlyContinue
+              throw 'Installed Meridian failed HTTP health check'
+            }
             $auth=Invoke-RestMethod 'http://127.0.0.1:18765/api/auth/status'
             if ($auth.configured) {throw 'Fresh installation must request owner setup'}
             $login=Invoke-WebRequest 'http://127.0.0.1:18765/' -UseBasicParsing
