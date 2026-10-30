@@ -235,5 +235,6 @@ document.addEventListener('change',e=>{if(e.target.id==='backup-file')importBack
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modalSpec){closeModal();return;}if(e.key==='Enter'&&e.target.classList.contains('project-card'))location.hash=e.target.dataset.go;});
 window.addEventListener('hashchange',()=>{projectTab='plan';render();window.scrollTo(0,0);});
 $('#refresh-button').addEventListener('click',async()=>{try{const r=await call('/refresh','POST',{kind:'all'});toast(r.started?'Refreshing GitHub and sites…':'A refresh is already in progress.');await load(true);}catch(e){toast(e.message,true);}});
+$('#lock-button').addEventListener('click',async()=>{try{await fetch('/api/auth/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}finally{location.replace('/');}});
 $('#menu-toggle').innerHTML=ico('menu');
 current=currentHash();load();setInterval(()=>{if(!modalSpec)load(true);},12000);
