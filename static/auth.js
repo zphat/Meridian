@@ -1,7 +1,8 @@
 'use strict';
 (async function(){
   const form=document.querySelector('#form'), heading=document.querySelector('#heading'),description=document.querySelector('#description'),provider=document.querySelector('#provider'),submit=document.querySelector('#submit'),message=document.querySelector('#message');
-  let mode='login', polling=null;
+  const codeForm=document.querySelector('#code-form'),codeBox=document.querySelector('#email-code'),codeSubmit=document.querySelector('#confirm-code'),codeMessage=document.querySelector('#code-message');
+  let mode='login', polling=null,activeChallenge=null;
   function createChallenge(){
     const random=new Uint8Array(32);crypto.getRandomValues(random);
     return btoa(String.fromCharCode(...random)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
@@ -41,14 +42,41 @@
       const obj=await response.json();
       if(!response.ok)throw new Error(obj.error||'Unable to complete request');
       if(mode==='setup'){
-        mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first one-time sign-in link has been sent. Choose “Open Meridian desktop” in the email, or use the browser confirmation fallback.';
+        mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first eight-digit verification code was sent. Enter it below to unlock Meridian.';
         provider.hidden=true;form.elements.resend_key.required=false;submit.textContent='Send another link';form.elements.resend_key.value='';
-        message.className='good';message.textContent='Sign-in link sent. You may request another after the five-minute cooldown if needed.';
-      }else{message.className='good';message.textContent='Check your authorized inbox. The link expires in 10 minutes.';}
+        message.className='good';message.textContent='Verification code sent. You can request another after the five-minute cooldown if needed.';
+      }else{message.className='good';message.textContent='An eight-digit code has been sent to your authorized inbox. It expires in 10 minutes.';}
+      activeChallenge=challenge;
+      form.hidden=true;
+      codeForm.hidden=false;
+      codeMessage.textContent='Enter the eight-digit code from the email. You do not need to click any links.';
+      codeBox.value='';codeBox.focus();
       waitForEmailConfirmation(challenge);
-      message.textContent+=' This Meridian window unlocks automatically after approval. The browser confirmation is not a second copy of the app.';
       form.elements.password.value='';
     }catch(e){message.textContent=e.message||'Unexpected error';}
     finally{submit.disabled=false;}
   });
+  codeForm.addEventListener('submit',async event=>{
+    event.preventDefault();
+    if(!activeChallenge){codeMessage.textContent='Sign-in request expired. Request a new code.';return;}
+    const code=codeBox.value.replace(/\s+/g,'');
+    if(!/^[0-9]{8}$/.test(code)){codeMessage.textContent='Enter all eight digits from your email.';return;}
+    codeSubmit.disabled=true;
+    codeMessage.textContent='Verifying your email code…';
+    try{
+      const response=await fetch('/api/auth/confirm-code',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({challenge:activeChallenge,code})});
+      const result=await response.json();
+      if(!response.ok)throw Error(result.error||'Code could not be verified');
+      if(polling){clearInterval(polling);polling=null;}
+      activeChallenge=null;codeBox.value='';
+      location.replace('/');
+    }catch(error){codeMessage.textContent=error.message||'Unable to verify code.';}
+    finally{codeSubmit.disabled=false;}
+  });
+  document.querySelector('#code-back').addEventListener('click',()=>{
+    if(polling){clearInterval(polling);polling=null;}
+    activeChallenge=null;codeBox.value='';codeForm.hidden=true;form.hidden=false;
+    message.textContent='Your previous code is still valid for 10 minutes; returning here does not send another email. A new request is subject to the five-minute cooldown.';
+  });
+
 })();
