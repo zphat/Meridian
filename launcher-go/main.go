@@ -12,6 +12,10 @@ import (
  "syscall"
  "time"
  "unsafe"
+ "runtime"
+ "encoding/json"
+
+ webview2 "github.com/jchv/go-webview2"
 )
 
 func message(s string) {
@@ -46,34 +50,89 @@ func approveDesktopLink(raw string) error {
  return nil
 }
 
+
+const currentVersion = "0.2.12"
+const localURL = "http://127.0.0.1:8765/"
+
+func healthy() (string,bool) {
+ client:=&http.Client{Timeout:800*time.Millisecond}
+ resp,err:=client.Get(localURL+"api/health")
+ if err!=nil{return "",false}
+ defer resp.Body.Close()
+ if resp.StatusCode!=200{return "",false}
+ var state struct{App string; Version string}
+ if json.NewDecoder(resp.Body).Decode(&state)!=nil{return "",false}
+ if state.App!="Meridian"{return "",false}
+ return state.Version,true
+}
+
+func presentNativeWindow() {
+ runtime.LockOSThread()
+ defer runtime.UnlockOSThread()
+ // A native application model ID groups running windows with Meridian's
+ // own Start Menu shortcut, rather than Edge's taskbar identity.
+ appID,_:=syscall.UTF16PtrFromString("Meridian.Desktop")
+ syscall.NewLazyDLL("shell32.dll").NewProc("SetCurrentProcessExplicitAppUserModelID").
+  Call(uintptr(unsafe.Pointer(appID)))
+ userData:=filepath.Join(os.Getenv("LOCALAPPDATA"),"Meridian","WebView2")
+ _=os.MkdirAll(userData,0700)
+ w:=webview2.NewWithOptions(webview2.WebViewOptions{
+  Debug:false,AutoFocus:true,DataPath:userData,
+  WindowOptions:webview2.WindowOptions{
+    Title:"Meridian",Width:1280,Height:850,IconId:2,Center:true,
+  },
+ })
+ if w==nil{
+  message("The native Meridian window needs Microsoft Edge WebView2 Runtime. Opening the dashboard in your browser instead.")
+  _=exec.Command("rundll32.exe","url.dll,FileProtocolHandler",localURL).Start()
+  return
+ }
+ defer w.Destroy()
+ w.Navigate(localURL)
+ w.Run()
+}
+
 func main(){
- exe,err:=os.Executable();if err!=nil {message("Unable to find Meridian installation: "+err.Error());return}
+ exe,err:=os.Executable()
+ if err!=nil {message("Could not locate Meridian application: "+err.Error());return}
  root:=filepath.Dir(exe)
  py:=filepath.Join(root,"runtime","python.exe")
  app:=filepath.Join(root,"meridian.py")
- if _,err:=os.Stat(py);err!=nil {message("Meridian's internal runtime is missing. Run the Meridian installer again.");return}
+ if _,err:=os.Stat(py);err!=nil {message("The Meridian internal runtime is missing. Run the installer again.");return}
  if _,err:=os.Stat(app);err!=nil {message("Meridian application files are missing. Run the installer again.");return}
+
  if len(os.Args)>1 && strings.HasPrefix(strings.ToLower(os.Args[1]),"meridian:"){
-  if err:=approveDesktopLink(os.Args[1]);err!=nil {message(err.Error());os.Exit(1)}
-  return
+   if e:=approveDesktopLink(os.Args[1]);e!=nil {message(e.Error());os.Exit(1)}
+   return
  }
+
  logPath:=filepath.Join(os.Getenv("LOCALAPPDATA"),"Meridian","logs")
  _=os.MkdirAll(logPath,0700)
  log,err:=os.OpenFile(filepath.Join(logPath,"startup.log"),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600)
  if err!=nil {message("Cannot open Meridian startup log: "+err.Error());return}
  defer log.Close()
- fmt.Fprintf(log,"\n--- Meridian launch %s ---\n",time.Now().Format(time.RFC3339))
- cmd:=exec.Command(py,app)
- cmd.Dir=root
- cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}
- cmd.Stdout=log;cmd.Stderr=log
- if err:=cmd.Start();err!=nil {message("Could not launch Meridian: "+err.Error());return}
- exited:=make(chan error,1)
- go func(){exited<-cmd.Wait()}()
- select {
- case e:=<-exited:
-  if e!=nil {message("Meridian failed to start. Details: "+filepath.Join(logPath,"startup.log")+"\n"+e.Error())}
- case <-time.After(1800*time.Millisecond):
-  // Python continues independently after this launcher closes.
+ fmt.Fprintf(log,"\n--- Meridian native window %s ---\n",time.Now().Format(time.RFC3339))
+
+ var child *exec.Cmd
+ if version,ok:=healthy();ok{
+   if version!=currentVersion{message("A different Meridian version ("+version+") is still running. Close it and reopen Meridian "+currentVersion+".");return}
+ }else{
+   child=exec.Command(py,app,"--no-browser","--no-tray")
+   child.Dir=root
+   child.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}
+   child.Stdout=log;child.Stderr=log
+   if e:=child.Start();e!=nil {message("Could not start Meridian: "+e.Error());return}
+   defer func(){if child.Process!=nil{_ = child.Process.Kill();_ = child.Wait()}}()
+   ready:=false
+   for n:=0;n<80;n++{
+     time.Sleep(150*time.Millisecond)
+     if version,ok:=healthy();ok{
+       if version==currentVersion{ready=true;break}
+       message("Another Meridian version ("+version+") is already using the dashboard port.")
+       return
+     }
+   }
+   if !ready{message("Meridian service did not start. Details: "+filepath.Join(logPath,"startup.log"));return}
  }
+ presentNativeWindow()
 }
