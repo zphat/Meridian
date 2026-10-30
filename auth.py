@@ -145,6 +145,8 @@ class AuthManager:
             if not row or row[1]<=now:raise AuthError('Code expired. Request a new sign-in email.',401)
             if row[2]>=5:raise AuthError('Too many incorrect codes. Request a new sign-in email.',429)
             self.conn.execute('UPDATE auth_codes SET attempts=attempts+1 WHERE challenge_hash=?',(key,))
+            # Failed attempts must survive exceptions so brute-force limits hold.
+            self.conn.commit()
             if not hmac.compare_digest(row[0],self._hash(challenge+':'+code)):
                 raise AuthError('Incorrect code. Check your email and try again.',401)
             pending=self.conn.execute('SELECT magic_hash FROM auth_handoff WHERE challenge_hash=? AND expires>?',(key,now)).fetchone()
