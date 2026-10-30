@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.11"
+VERSION = "0.2.12"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -503,7 +503,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.11"
+    server_version="Meridian/0.2.12"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -637,6 +637,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Cache-Control','no-store')
                 self.send_header('X-Content-Type-Options','nosniff')
                 self.send_header('Referrer-Policy','no-referrer')
+                self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
+                self.end_headers();self.wfile.write(data);return
+            if path=="/api/auth/confirm-code" and method=="POST":
+                cookie=self.app.auth.confirm_code(body.get('challenge'),body.get('code'))
+                remote=(urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname or '') not in ('127.0.0.1','localhost')
+                data=b'{"authenticated":true}'
+                self.send_response(200)
+                self.send_header('Content-Type','application/json; charset=utf-8')
+                self.send_header('Content-Length',str(len(data)))
+                self.send_header('Cache-Control','no-store')
+                self.send_header('X-Content-Type-Options','nosniff')
                 self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
                 self.end_headers();self.wfile.write(data);return
             if path=="/api/auth/logout" and method=="POST":
