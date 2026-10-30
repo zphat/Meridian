@@ -66,7 +66,31 @@ func healthy() (string,bool) {
  return state.Version,true
 }
 
-func presentNativeWindow() {
+// Explicitly assign both icon sizes to the actual Win32 window and its
+// registered class. The embedded EXE resource alone does not update this
+// third-party WebView2 window class or the taskbar button.
+func applyNativeIcon(w webview2.WebView, icoFile string) error {
+ hwnd:=uintptr(w.Window())
+ if hwnd==0{return fmt.Errorf("Meridian window handle is missing")}
+ name,e:=syscall.UTF16PtrFromString(icoFile)
+ if e!=nil{return e}
+ lib:=syscall.NewLazyDLL("user32.dll")
+ load:=lib.NewProc("LoadImageW")
+ msg:=lib.NewProc("SendMessageW")
+ class:=lib.NewProc("SetClassLongPtrW")
+ big,_,_:=load.Call(0,uintptr(unsafe.Pointer(name)),1,32,32,0x10)
+ small,_,_:=load.Call(0,uintptr(unsafe.Pointer(name)),1,16,16,0x10)
+ if big==0 || small==0{return fmt.Errorf("could not load Meridian taskbar artwork from "+icoFile)}
+ msg.Call(hwnd,0x80,1,big)
+ msg.Call(hwnd,0x80,0,small)
+ bigIndex:=int32(-14)
+ smallIndex:=int32(-34)
+ class.Call(hwnd,uintptr(bigIndex),big)
+ class.Call(hwnd,uintptr(smallIndex),small)
+ return nil
+}
+
+func presentNativeWindow(root string) {
  runtime.LockOSThread()
  defer runtime.UnlockOSThread()
  // A native application model ID groups running windows with Meridian's
@@ -88,6 +112,9 @@ func presentNativeWindow() {
   return
  }
  defer w.Destroy()
+ if err:=applyNativeIcon(w,filepath.Join(root,"assets","meridian.ico"));err!=nil {
+  message("Meridian's native window could not set its application icon: "+err.Error())
+ }
  w.Navigate(localURL)
  w.Run()
 }
@@ -134,5 +161,5 @@ func main(){
    }
    if !ready{message("Meridian service did not start. Details: "+filepath.Join(logPath,"startup.log"));return}
  }
- presentNativeWindow()
+ presentNativeWindow(root)
 }
