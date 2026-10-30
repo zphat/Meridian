@@ -24,7 +24,7 @@ var files embed.FS
 
 const (
  runtimeSHA256="4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
- appVersion="0.2.10"
+ appVersion="0.2.11"
  pyURL="https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
  title="Meridian Setup"
 )
@@ -133,6 +133,20 @@ func registry(dir string,remove bool)error{
  for _,kv:=range pairs {if err:=quiet("reg.exe","add",key,"/v",kv[0],"/t",kv[1],"/d",kv[2],"/f");err!=nil{return err}}
  return nil
 }
+// Register the per-user URL scheme; this stores no secrets.
+func registerProtocol(dir string, remove bool) error {
+ key := `HKCU\Software\Classes\meridian`
+ if remove { return quiet("reg.exe","delete",key,"/f") }
+ command := `"`+filepath.Join(dir,"Meridian.exe")+`" "%1"`
+ commands := [][]string{
+  {"add",key,"/ve","/t","REG_SZ","/d","URL:Meridian sign-in link","/f"},
+  {"add",key,"/v","URL Protocol","/t","REG_SZ","/d","","/f"},
+  {"add",key+`\shell\open\command`,"/ve","/t","REG_SZ","/d",command,"/f"},
+ }
+ for _,args := range commands { if err:=quiet("reg.exe",args...);err!=nil{return err} }
+ return nil
+}
+
 // Stop only this installation's Python process, never unrelated Python applications.
 // Otherwise an older process can keep the local port and display the old UI.
 func stopPreviousMeridian(dir string) error {
@@ -167,6 +181,7 @@ func install(silent bool)error{
  if err:=copyFile(self,filepath.Join(dir,"Uninstall-Meridian.exe"));err!=nil{return err}
  if err:=shortcuts(dir,false);err!=nil{return err}
  if err:=registry(dir,false);err!=nil{return err}
+ if err:=registerProtocol(dir,false);err!=nil{return err}
  if !silent {
   message("Meridian "+appVersion+" has been installed.\n\nThe application will open now. On first launch, enter your authorized email, new access password, and Resend API key.\n\nYour existing notes are preserved.",0x40)
   cmd:=exec.Command(filepath.Join(dir,"Meridian.exe"));cmd.Dir=dir;cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}
@@ -193,6 +208,7 @@ func uninstallWorker()error{
  time.Sleep(1200*time.Millisecond)
  _=shortcuts(dir,true)
  _=registry(dir,true)
+ _=registerProtocol(dir,true)
  if e:=os.RemoveAll(dir);e!=nil{return e}
  message("Meridian has been uninstalled. Your notes and database were preserved.",0x40)
  return nil
