@@ -223,6 +223,38 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
           }
+      - name: Verify native Meridian window owns its taskbar icon
+        shell: pwsh
+        run: |
+          $launcher=Join-Path $env:LOCALAPPDATA 'Programs/Meridian/Meridian.exe'
+          $p=Start-Process -FilePath $launcher -PassThru
+          try {
+            $handle=[IntPtr]::Zero
+            for($n=0;$n -lt 50;$n++){
+              Start-Sleep -Milliseconds 400
+              $p.Refresh()
+              if($p.HasExited){throw "Native Meridian window exited unexpectedly"}
+              $handle=$p.MainWindowHandle
+              if($handle -ne [IntPtr]::Zero){break}
+            }
+            if($handle -eq [IntPtr]::Zero){throw "Meridian did not create its own native taskbar window"}
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class MeridianWindowTest {
+            [DllImport("user32.dll",EntryPoint="SendMessageW")]
+            public static extern IntPtr SendMessage(IntPtr hWnd, UInt32 msg, IntPtr wParam, IntPtr lParam);
+            [DllImport("user32.dll",EntryPoint="GetClassLongPtrW")]
+            public static extern IntPtr GetClassLongPtr(IntPtr hWnd,int index);
+          }
+          '@
+            $icon=[MeridianWindowTest]::SendMessage($handle,0x7F,[IntPtr]1,[IntPtr]::Zero)
+            if($icon -eq [IntPtr]::Zero){$icon=[MeridianWindowTest]::GetClassLongPtr($handle,-14)}
+            if($icon -eq [IntPtr]::Zero){throw "Native Meridian window has no Windows icon assigned"}
+            Write-Host "Native Meridian window and taskbar icon verified"
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
