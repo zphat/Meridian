@@ -60,19 +60,19 @@ jobs:
         run: |
           $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
           Push-Location installer-go
-          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.8.exe .
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.9.exe .
           Pop-Location
       - name: Confirm installer PE format
         shell: pwsh
         run: |
-          $f=Get-Item Meridian-Setup-0.2.8.exe
+          $f=Get-Item Meridian-Setup-0.2.9.exe
           if($f.Length -lt 1000000){throw "Installer unexpectedly small"}
           $bytes=[IO.File]::ReadAllBytes($f.FullName)
           if($bytes[0] -ne 77 -or $bytes[1] -ne 90){throw "Not a Windows PE executable"}
       - name: Install and smoke test on Windows
         shell: pwsh
         run: |
-          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.8.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.9.exe'
           $install=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with code $($install.ExitCode)" }
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
@@ -88,7 +88,7 @@ jobs:
               Start-Sleep -Seconds 1
               try {
                 $h=Invoke-RestMethod 'http://127.0.0.1:18765/api/health' -TimeoutSec 2
-                if ($h.ok -and $h.version -eq '0.2.8') {$healthy=$true;break}
+                if ($h.ok -and $h.version -eq '0.2.9') {$healthy=$true;break}
               } catch {}
             }
             if (-not $healthy) {
@@ -109,10 +109,44 @@ jobs:
             }
             Write-Host 'Private dashboard blocked before sign-in'
           } finally { Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue }
+      - name: Verify reinstalls stop old background Meridian and show setup
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
+          $py=Join-Path $root 'runtime/python.exe'
+          $app=Join-Path $root 'meridian.py'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.9.exe'
+          $old=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','8765') -PassThru -WindowStyle Hidden
+          try {
+            $started=$false
+            for($j=0;$j -lt 40;$j++) {
+              Start-Sleep -Milliseconds 500
+              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.9') {$started=$true;break}} catch {}
+            }
+            if(-not $started){throw 'Pre-upgrade Meridian did not start'}
+            $upgrade=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
+            if($upgrade.ExitCode -ne 0){throw "Upgrade returned $($upgrade.ExitCode)"}
+            $old.Refresh()
+            if(-not $old.HasExited){throw 'Installer failed to terminate running Meridian backend'}
+            $new=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','8765') -PassThru -WindowStyle Hidden
+            try {
+              $ready=$false
+              for($j=0;$j -lt 40;$j++) {
+                Start-Sleep -Milliseconds 500
+                try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.9') {$ready=$true;break}} catch {}
+              }
+              if(-not $ready){throw 'New Meridian did not restart'}
+              $state=Invoke-RestMethod 'http://127.0.0.1:8765/api/auth/status'
+              if($state.configured -or -not $state.local_setup){throw 'New Meridian did not expose first-run setup'}
+              $login=Invoke-WebRequest 'http://127.0.0.1:8765/' -UseBasicParsing
+              if($login.Content -notmatch 'Sign in to Meridian'){throw 'First-run setup UI missing after reinstall'}
+              Write-Host 'Reinstall process cleanup and first-run setup verified'
+            } finally {Stop-Process -Id $new.Id -ErrorAction SilentlyContinue}
+          } finally {Stop-Process -Id $old.Id -ErrorAction SilentlyContinue}
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
-          path: Meridian-Setup-0.2.8.exe
+          path: Meridian-Setup-0.2.9.exe
   release:
     needs: windows
     runs-on: ubuntu-latest
@@ -126,9 +160,9 @@ jobs:
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
-          tag="v0.2.8"
+          tag="v0.2.9"
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            gh release upload "$tag" Meridian-Setup-0.2.8.exe --repo "$repo" --clobber
+            gh release upload "$tag" Meridian-Setup-0.2.9.exe --repo "$repo" --clobber
           else
-            gh release create "$tag" Meridian-Setup-0.2.8.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
+            gh release create "$tag" Meridian-Setup-0.2.9.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
           fi

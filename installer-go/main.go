@@ -7,6 +7,7 @@ import (
  "embed"
  "fmt"
  "io"
+ "net"
  "net/http"
  "os"
  "os/exec"
@@ -23,7 +24,7 @@ var files embed.FS
 
 const (
  runtimeSHA256="4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
- appVersion="0.2.8"
+ appVersion="0.2.9"
  pyURL="https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
  title="Meridian Setup"
 )
@@ -132,11 +133,31 @@ func registry(dir string,remove bool)error{
  for _,kv:=range pairs {if err:=quiet("reg.exe","add",key,"/v",kv[0],"/t",kv[1],"/d",kv[2],"/f");err!=nil{return err}}
  return nil
 }
+// Stop only this installation's Python process, never unrelated Python applications.
+// Otherwise an older process can keep the local port and display the old UI.
+func stopPreviousMeridian(dir string) error {
+ app := filepath.Join(dir,"meridian.py")
+ script := `$target=` + psQuote(app) + `; $ps=@(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($target,[StringComparison]::OrdinalIgnoreCase) -ge 0 }); foreach($p in $ps){ Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop }; if($ps.Count -gt 0){ Start-Sleep -Milliseconds 700 }`
+ if e := quiet("powershell.exe","-NoProfile","-NonInteractive","-Command",script); e!=nil {
+  return fmt.Errorf("could not stop a previous Meridian instance: %w", e)
+ }
+ return nil
+}
+func ensurePortFree() error {
+ conn,e:=net.DialTimeout("tcp","127.0.0.1:8765",500*time.Millisecond)
+ if e==nil {
+  conn.Close()
+  return fmt.Errorf("Meridian's port 8765 is still occupied. Close any older Meridian instance or launcher, then run this installer again")
+ }
+ return nil
+}
 func install(silent bool)error{
  dir,err:=path();if err!=nil{return err}
  if !silent && message("Install Meridian "+appVersion+" to your Windows account?\n\nThis is a normal Start Menu/Desktop installation. It downloads its own official Python runtime once (~11 MB); no developer tools or Python installation required.\n\nYour notes and project data will remain untouched during upgrades.",0x24)!=6{return nil}
  if err:=os.MkdirAll(dir,0755);err!=nil{return err}
  if err:=downloadRuntime(filepath.Join(dir,"runtime"));err!=nil{return err}
+ if err:=stopPreviousMeridian(dir);err!=nil{return err}
+ if err:=ensurePortFree();err!=nil{return err}
  if err:=installPayload(dir);err!=nil{return err}
  // Run a local self-test with the bundled interpreter before registering the installation.
  probe:=exec.Command(filepath.Join(dir,"runtime","python.exe"),"-c","import sqlite3, ssl, json; print('Meridian runtime OK')")
@@ -146,8 +167,10 @@ func install(silent bool)error{
  if err:=copyFile(self,filepath.Join(dir,"Uninstall-Meridian.exe"));err!=nil{return err}
  if err:=shortcuts(dir,false);err!=nil{return err}
  if err:=registry(dir,false);err!=nil{return err}
- if !silent && message("Meridian "+appVersion+" is installed.\n\nYou can open it from the Start Menu or Desktop.\n\nLaunch Meridian now?",0x24)==6{
-  cmd:=exec.Command(filepath.Join(dir,"Meridian.exe"));cmd.Dir=dir;cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true};return cmd.Start()
+ if !silent {
+  message("Meridian "+appVersion+" has been installed.\n\nThe application will open now. On first launch, enter your authorized email, new access password, and Resend API key.\n\nYour existing notes are preserved.",0x40)
+  cmd:=exec.Command(filepath.Join(dir,"Meridian.exe"));cmd.Dir=dir;cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}
+  if err:=cmd.Start();err!=nil{return fmt.Errorf("installed successfully, but couldn't open Meridian: %w",err)}
  }
  return nil
 }

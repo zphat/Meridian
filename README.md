@@ -1,4 +1,4 @@
-# Meridian 0.2.7
+# Meridian 0.2.9
 
 Local-first personal control center for Latitude, Longitude, and Sundial.
 
@@ -12,7 +12,7 @@ Local-first personal control center for Latitude, Longitude, and Sundial.
 
 ## Windows
 
-Run `Meridian-Setup-0.2.7.exe` (compiled, x64). It installs to your user profile with Start Menu and desktop links, and fetches a pinned, verified Python embeddable runtime during first installation. Requires internet at first install. It is not code signed.
+Run `Meridian-Setup-0.2.9.exe` (compiled, x64). It installs to your user profile with Start Menu and desktop links, and fetches a pinned, verified Python embeddable runtime during first installation. Requires internet at first install. It is not code signed.
 
 ## GitHub updates
 
@@ -28,7 +28,7 @@ Notes, goals, decisions, samples, downloads and snapshots are stored in the loca
 
 
 
-## Private owner sign-in (v0.2.8)
+## Private owner sign-in (v0.2.9)
 
 Meridian now protects the entire dashboard and private API behind an authorized email and password followed by a one-time email magic link. On first local launch, register a free [Resend](https://resend.com/signup) account using the authorized inbox. Create a **Sending access** key in [Resend API Keys](https://resend.com/api-keys). Enter that key, your email, and chosen password in Meridian's local-only setup screen. The first magic link is sent immediately; if the provider rejects the key or recipient, setup rolls back without deleting project notes.
 
@@ -37,3 +37,9 @@ The authorized email, password and API key **must not** be committed to GitHub. 
 For the Resend test sender `onboarding@resend.dev`, mail is limited to the address associated with the Resend account unless a sending domain is verified. Open emailed `localhost` links on the Windows PC running Meridian; to log in from another device, open Meridian through your trusted Tailscale hostname and request a link there.
 
 If provider credentials change and you cannot log in, exit Meridian and remove only `%USERPROFILE%\\.meridian\\auth.json` from your local computer. Your SQLite project notes remain intact. The Windows installer upgrade retains local data.
+
+## Windows first-run fix (v0.2.9)
+
+The installer stops an older background Meridian process before upgrading, then opens the new application automatically. Before configuration, the home screen presents a one-time setup form for the authorized email address, an access password, and a Resend Sending access key. Project notes and other local data survive upgrades. Existing authentication settings remain in place and will show the normal sign-in form rather than setup.
+
+If you already installed v0.2.8 but see the old dashboard, quit old Meridian processes and install v0.2.9. The launcher now refuses to silently open an outdated background version.
