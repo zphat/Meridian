@@ -1,5 +1,6 @@
 """Private single-owner email magic links. Never commit owner config or keys."""
-import base64, hashlib, hmac, json, os, re, secrets, time, urllib.request, urllib.error
+import base64, hashlib, hmac, json, os, re, secrets, time, urllib.request, urllib.error, urllib.parse
+from html import escape
 from pathlib import Path
 from http.cookies import SimpleCookie
 
@@ -93,24 +94,58 @@ class AuthManager:
             return {'ok':True,'message':'A one-time sign-in link was sent to the authorized inbox.'}
     @staticmethod
     def _send_resend(cfg,url):
-        data=json.dumps({'from':cfg['from'],'to':[cfg['email']],'subject':'Your Meridian sign-in link',
-           'text':'Open this private link on the device running Meridian, or another device connected to Tailscale. It expires in 10 minutes and works once.\n\n'+url+'\n\nIf you did not request this, ignore it.'}).encode()
+        # Prefer a registered Meridian desktop link on Windows. The browser URL
+        # remains an explicit fallback for webmail clients that block app links.
+        # The magic token is never logged or stored in plaintext by Meridian.
+        token=urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get('token',[''])[0]
+        desktop_url='meridian://approve?token='+urllib.parse.quote(token,safe='')
+        browser_url=escape(url,quote=True)
+        desktop_html=escape(desktop_url,quote=True)
+        subject='Unlock Meridian desktop'
+        content=(
+            'You requested a Meridian desktop sign-in. Open this link on your Windows PC while Meridian is on its sign-in screen.\n\n'
+            'OPEN MERIDIAN (desktop link):\n'+desktop_url+'\n\n'
+            'If your email app blocks the desktop link, confirm the sign-in with a browser instead:\n'+url+'\n\n'
+            'Return to the waiting Meridian window; it unlocks automatically.\n'
+            'Both links are single-use and expire in 10 minutes. If you did not request this, ignore this email.'
+        )
+        html=(
+            '<!doctype html><html><body style="font-family:Arial,sans-serif;color:#17251d;line-height:1.6">'
+            '<h2>Unlock Meridian</h2>'
+            '<p>On the Windows computer where Meridian is waiting for sign-in, choose the desktop link:</p>'
+            '<p><a href="'+desktop_html+'" style="display:inline-block;padding:12px 18px;background:#155e38;color:white;text-decoration:none;border-radius:7px">Open Meridian desktop</a></p>'
+            '<p>If Proton Mail blocks the desktop link, '
+            '<a href="'+browser_url+'">confirm in a browser instead</a>, then return to Meridian.</p>'
+            '<p>Both links expire in 10 minutes and can be used once. Ignore this email if you did not request it.</p>'
+            '</body></html>'
+        )
+        data=json.dumps({'from':cfg['from'],'to':[cfg['email']],'subject':subject,'text':content,'html':html}).encode()
         req=urllib.request.Request('https://api.resend.com/emails',data=data,headers={
-            'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json','User-Agent':'Meridian/0.2.10'},method='POST')
+            'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json','User-Agent':'Meridian/0.2.11'},method='POST')
         try:
             with urllib.request.urlopen(req,timeout=12) as response:
                 if response.status not in (200,201,202):raise AuthError('Email service unavailable',502)
         except (urllib.error.URLError,TimeoutError) as e:
             raise AuthError('Email delivery failed. Check the Resend account and API key.',502) from e
     def redeem(self,token):
+        """Use an email token once; prefer unlocking its waiting app over browser login.
+
+        Returns None for a desktop handoff; otherwise a browser session cookie
+        for deliberate remote/browser-only sign-in.
+        """
         if not isinstance(token,str) or not 30<=len(token)<=256:raise AuthError('Invalid or expired sign-in link',401)
-        now=int(time.time())
+        now=int(time.time()); token_hash=self._hash(token)
         with self.lock,self.conn:
-            cur=self.conn.execute('UPDATE auth_magic SET used=1 WHERE token_hash=? AND used=0 AND expires>?',(self._hash(token),now))
+            cur=self.conn.execute('UPDATE auth_magic SET used=1 WHERE token_hash=? AND used=0 AND expires>?',(token_hash,now))
             if cur.rowcount!=1:raise AuthError('Invalid, expired or already used sign-in link',401)
-            self.conn.execute('UPDATE auth_handoff SET approved=1 WHERE magic_hash=? AND expires> ?',(self._hash(token),now))
-            cookie=secrets.token_urlsafe(40)
-            self.conn.execute('INSERT INTO auth_sessions(token_hash,expires) VALUES(?,?)',(self._hash(cookie),now+43200))
+            handoff=self.conn.execute(
+                'UPDATE auth_handoff SET approved=1 WHERE magic_hash=? AND approved=0 AND expires>?',
+                (token_hash,now)
+            ).rowcount==1
+            cookie=None
+            if not handoff:
+                cookie=secrets.token_urlsafe(40)
+                self.conn.execute('INSERT INTO auth_sessions(token_hash,expires) VALUES(?,?)',(self._hash(cookie),now+43200))
             self.conn.execute('DELETE FROM auth_magic WHERE expires<? OR used=1',(now,))
             self.conn.execute('DELETE FROM auth_handoff WHERE expires<?',(now,))
             self.conn.execute('DELETE FROM auth_sessions WHERE expires<?',(now,))
