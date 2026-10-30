@@ -1,0 +1,33 @@
+name: Validate Meridian private access
+on:
+  push:
+    branches: [feature/private-magic-link-v028]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check Python code
+        run: python -m compileall -q meridian.py auth.py tests/
+      - name: Run all tests (offline, mocked email delivery)
+        run: python -m unittest discover -s tests -v
+      - name: Validate both JavaScript entry points
+        run: |
+          node --check static/app.js
+          node --check static/auth.js
+      - name: Ensure private data is not committed
+        run: |
+          if git ls-files | grep -Ei '(^|/)(auth\.json|\.env|secrets\.json|meridian\.sqlite3)(/|$)'; then
+            echo 'Private owner data was committed' >&2
+            exit 1
+          fi
