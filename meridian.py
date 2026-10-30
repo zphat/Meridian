@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.12"
+VERSION = "0.2.13"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -503,7 +503,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.12"
+    server_version="Meridian/0.2.13"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -572,7 +572,7 @@ class Handler(BaseHTTPRequestHandler):
         path=urllib.parse.urlsplit(self.path).path
         if path=="/api/health":return self.reply({"ok":True,"app":"Meridian","version":VERSION,"local":True})
         if path=="/api/auth/status":
-            return self.reply({"configured":self.app.auth.configured(),"authenticated":self.session_valid(),
+            return self.reply({"version":VERSION,"configured":self.app.auth.configured(),"authenticated":self.session_valid(),
                 "local_setup":self.headers.get("Host","").split(":")[0].lower() in ("127.0.0.1","localhost")})
         if path=="/auth/verify":
             token=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("token",[""])[0]
@@ -668,7 +668,7 @@ class Handler(BaseHTTPRequestHandler):
                 if method=="PATCH" and table=="goals":self.app.change_goal(id,body);return self.reply({"ok":True})
                 if method=="DELETE":self.app.delete(table,id);return self.reply({"ok":True})
             return self.reply({"error":"No matching endpoint"},404)
-        except AuthError as e:return self.reply({"error":str(e)},e.status)
+        except AuthError as e:return self.reply({"error":str(e),"retry_after":getattr(e,"retry_after",0)},e.status)
         except (ValueError,KeyError,TypeError,sqlite3.Error) as e:return self.reply({"error":str(e)},400)
         except Exception as e:return self.reply({"error":"Unexpected operation error"},500)
 
