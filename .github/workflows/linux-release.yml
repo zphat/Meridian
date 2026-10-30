@@ -3,6 +3,8 @@ name: Build, test and publish Meridian for Linux
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -62,6 +64,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.event_name != 'pull_request'
     needs: linux
     runs-on: ubuntu-latest
     steps:
