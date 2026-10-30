@@ -15,6 +15,11 @@ class AuthUnitTests(unittest.TestCase):
     def test_config_never_stores_plain_password(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
         assert 'a long test secret' not in (Path(self.tmp.name)/'auth.json').read_text()
+    def test_seven_character_password(self):
+        self.app.auth.configure('owner@example.com','abc123!','re_test_valid_token_12345')
+        sent=[]
+        self.app.auth.issue_link('owner@example.com','abc123!','http://127.0.0.1:8765',lambda c,u:sent.append(u))
+        self.assertEqual(len(sent),1)
     def test_invalid_credentials_cannot_send_email(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
         sent=[]
