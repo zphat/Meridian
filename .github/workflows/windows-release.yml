@@ -2,6 +2,8 @@ name: Build, test and publish Meridian for Windows
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: meridian-windows-release
@@ -226,6 +228,7 @@ jobs:
           name: Meridian-Windows
           path: Meridian-Setup-0.2.12.exe
   release:
+    if: github.event_name != 'pull_request'
     needs: windows
     runs-on: ubuntu-latest
     steps:
