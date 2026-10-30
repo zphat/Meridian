@@ -71,11 +71,11 @@
     try{
       const response=await fetch(mode==='setup'?'/api/auth/setup':'/api/auth/request',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(data)});
       const obj=await response.json();
-      if(!response.ok)throw new Error(obj.error||'Unable to complete request');
+      if(!response.ok){const error=new Error(obj.error||'Unable to complete request');error.retryAfter=obj.retry_after||0;throw error;}
       if(mode==='setup'){
         mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first eight-digit verification code was sent. Enter it below to unlock Meridian.';
-        provider.hidden=true;form.elements.resend_key.required=false;submit.textContent='Send another link';form.elements.resend_key.value='';
-        message.className='good';message.textContent='Verification code sent. You can request another after the five-minute cooldown if needed.';
+        provider.hidden=true;form.elements.resend_key.required=false;submit.textContent='Email me another eight-digit code';form.elements.resend_key.value='';
+        message.className='good';message.textContent='Verification code sent. Another email can be requested after the one-minute cooldown.';
       }else{message.className='good';message.textContent='An eight-digit code has been sent to your authorized inbox. It expires in 10 minutes.';}
       storePending(challenge);
       codeBox.value='';
@@ -83,8 +83,9 @@
       form.elements.password.value='';
     }catch(e){
       const existing=readPending();
-      if(existing){existingButton.hidden=false;message.textContent=(e.message||'Unable to send email')+' If you already received a code, use the button below.';}
-      else message.textContent=e.message||'Unexpected error';
+      const wait=e.retryAfter>0?' Try again in '+(e.retryAfter>=60?Math.ceil(e.retryAfter/60)+' minute(s)':e.retryAfter+' seconds')+'.':'';
+      if(existing){existingButton.hidden=false;message.textContent=(e.message||'Unable to send email')+wait+' If you already received a code, use the button below.';}
+      else message.textContent=(e.message||'Unexpected error')+wait;
     }
     finally{submit.disabled=false;}
   });
