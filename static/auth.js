@@ -1,118 +1,102 @@
 'use strict';
 (async function(){
-  const form=document.querySelector('#form'), heading=document.querySelector('#heading'),description=document.querySelector('#description'),provider=document.querySelector('#provider'),submit=document.querySelector('#submit'),message=document.querySelector('#message');
-  const codeForm=document.querySelector('#code-form'),codeBox=document.querySelector('#email-code'),codeSubmit=document.querySelector('#confirm-code'),codeMessage=document.querySelector('#code-message');
-  const existingButton=document.querySelector('#show-existing-code');
-  const pendingKey='meridian.pendingEmailCode';
-  let mode='login', polling=null,activeChallenge=null;
-  function storePending(challenge){
-    try{sessionStorage.setItem(pendingKey,JSON.stringify({challenge,until:Date.now()+10*60*1000}));}catch(_){}
-  }
+  const $=s=>document.querySelector(s);
+  const form=$('#form'),heading=$('#heading'),description=$('#description'),provider=$('#provider'),submit=$('#submit'),message=$('#message');
+  const codeForm=$('#code-form'),codeBox=$('#email-code'),codeSubmit=$('#confirm-code'),codeMessage=$('#code-message'),existingButton=$('#show-existing-code');
+  const pendingKey='meridian.pendingEmailCode',cooldownKey='meridian.emailCooldown';
+  let mode='login',polling=null,active=null,sending=false,cooldownTimer=null;
+  const stored=(key)=>{try{return JSON.parse(sessionStorage.getItem(key)||'null');}catch(_){return null;}};
+  const save=(key,value)=>{try{sessionStorage.setItem(key,JSON.stringify(value));}catch(_){}};
   function readPending(){
+    const p=stored(pendingKey);
+    return p && /^[A-Za-z0-9_-]{43}$/.test(p.challenge||'') && p.until>Date.now()?p:null;
+  }
+  function clearPending(){try{sessionStorage.removeItem(pendingKey);}catch(_){}active=null;existingButton.hidden=true;}
+  function stopPolling(){clearTimeout(polling);polling=null;}
+  function updateCooldown(){
+    clearTimeout(cooldownTimer);
+    const remaining=Math.max(0,Math.ceil(((stored(cooldownKey)||0)-Date.now())/1000));
+    submit.disabled=sending||remaining>0;
+    submit.textContent=sending?'Sending…':remaining>0?`Request another in ${remaining>=3600?Math.ceil(remaining/3600)+'h':remaining>=60?Math.ceil(remaining/60)+'m':remaining+'s'}`:mode==='setup'?'Set up and email my code':'Email me an eight-digit code';
+    if(remaining>0&&!document.hidden)cooldownTimer=setTimeout(updateCooldown,remaining>60?10000:1000);
+  }
+  function setCooldown(seconds){if(seconds>0)save(cooldownKey,Date.now()+seconds*1000);updateCooldown();}
+  function showLogin(){
+    stopPolling();codeForm.hidden=true;form.hidden=false;existingButton.hidden=!readPending();
+    heading.textContent='Sign in to Meridian';
+    description.textContent='Use your authorized email and password, then enter the code from your inbox.';
+    updateCooldown();
+  }
+  function expire(){clearPending();showLogin();message.textContent='Your code expired. Request a new one when the countdown finishes.';}
+  async function poll(){
+    stopPolling();if(!active)return;
+    if(active.until<=Date.now()){expire();return;}
+    if(document.hidden)return;
     try{
-      const value=JSON.parse(sessionStorage.getItem(pendingKey)||'null');
-      if(value && typeof value.challenge==='string' && /^[A-Za-z0-9_-]{43}$/.test(value.challenge) && value.until>Date.now())return value;
-      sessionStorage.removeItem(pendingKey);
-    }catch(_){}
-    return null;
+      const r=await fetch('/api/auth/handoff',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({challenge:active.challenge})});
+      if(r.ok&&(await r.json()).authenticated){clearPending();location.replace('/');return;}
+    }catch(_){/* The service may briefly restart during an upgrade. */}
+    if(active)polling=setTimeout(poll,3000);
   }
-  function clearPending(){
-    try{sessionStorage.removeItem(pendingKey);}catch(_){}
-    activeChallenge=null;existingButton.hidden=true;
+  function showCode(p){
+    active=p;form.hidden=true;codeForm.hidden=false;
+    heading.textContent='Check your inbox';
+    description.textContent='Enter the eight-digit code in this window. You can leave the email links alone.';
+    codeMessage.textContent='Resend accepted the email. Check spam if it has not arrived. The code expires ten minutes after sending.';
+    $('#delivery-reference').textContent=p.emailId?'Email reference: '+p.emailId:'';
+    codeBox.focus();poll();
   }
-  function showCode(challenge){
-    activeChallenge=challenge;
-    form.hidden=true;codeForm.hidden=false;
-    existingButton.hidden=false;
-    heading.textContent='Enter your verification code';
-    description.textContent='Check the authorized inbox for your eight-digit code. No link needs to be opened.';
-    codeMessage.textContent='Enter the code from your email here. It expires ten minutes after sending.';
-    codeBox.focus();waitForEmailConfirmation(challenge);
-  }
-  function createChallenge(){
-    const random=new Uint8Array(32);crypto.getRandomValues(random);
-    return btoa(String.fromCharCode(...random)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
-  }
-  function waitForEmailConfirmation(challenge){
-    if(polling)clearInterval(polling);
-    const until=Date.now()+10*60*1000;
-    let busy=false;
-    polling=setInterval(async()=>{
-      if(busy)return;
-      if(Date.now()>until){clearInterval(polling);polling=null;clearPending();codeForm.hidden=true;form.hidden=false;heading.textContent='Code expired';message.textContent='Your verification code has expired. Request a new one.';return;}
-      busy=true;
-      try{
-        const r=await fetch('/api/auth/handoff',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({challenge})});
-        if(r.ok){const state=await r.json();if(state.authenticated){clearInterval(polling);polling=null;location.replace('/');}}
-      }catch(_){/* Retry while the local server is temporarily unavailable. */}
-      finally{busy=false;}
-    },1500);
+  function createChallenge(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');}
+  async function post(path,data){
+    const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify(data)});
+    const result=await r.json();
+    if(!r.ok){const e=Error(result.error||'Request failed. Please try again.');e.retryAfter=result.retry_after||0;throw e;}
+    return result;
   }
   try{
-    const response=await fetch('/api/auth/status',{cache:'no-store'}),state=await response.json();
+    const response=await fetch('/api/auth/status',{cache:'no-store'});
+    if(!response.ok)throw Error('Status unavailable');
+    const state=await response.json();$('#auth-version').textContent=state.version||'unknown';
     if(state.authenticated){clearPending();location.replace('/');return;}
-    const v=document.querySelector('#auth-version');if(v)v.textContent=state.version||'unknown';
     if(!state.configured){
-      if(!state.local_setup){heading.textContent='Setup required on your PC';description.textContent='Initialize Meridian on the computer where it is installed before opening it remotely.';form.hidden=true;return;}
-      mode='setup';heading.textContent='Set up private access';description.textContent='One-time setup: use the Proton inbox that should receive sign-in links, your access password, and your Resend API key. Nothing is committed to public source code.';
-      document.querySelector('#resend_key').required=true;submit.textContent='Secure Meridian';
-      document.querySelector('#password').autocomplete='new-password';
+      clearPending();save(cooldownKey,0);
+      if(!state.local_setup){heading.textContent='Set up on your PC';description.textContent='Open Meridian on the computer where it is installed to complete initial setup.';form.hidden=true;return;}
+      mode='setup';heading.textContent='Set up private access';
+      description.textContent='Use the inbox registered to your Resend account, choose an access password, and enter your Sending access API key.';
+      $('#resend_key').required=true;$('#password').autocomplete='new-password';
     }else{
-      provider.hidden=true;submit.textContent='Email me an eight-digit code';
-      const saved=readPending();
-      if(saved){existingButton.hidden=false;showCode(saved.challenge);}
+      provider.hidden=true;$('#email-settings').hidden=!state.local_setup;
+      const pending=readPending();if(pending)showCode(pending);
     }
-  }catch(e){message.textContent='Authentication status unavailable.';form.hidden=true;return;}
-  form.addEventListener('submit',async event=>{
-    event.preventDefault();submit.disabled=true;message.className='';message.textContent='Checking…';
+    updateCooldown();
+  }catch(_){message.textContent='Cannot reach Meridian. Close and reopen the app to reconnect.';form.hidden=true;return;}
+  form.addEventListener('submit',async e=>{
+    e.preventDefault();if(sending||submit.disabled)return;sending=true;updateCooldown();message.className='';message.textContent='Contacting the email service…';
     const challenge=createChallenge();
     const data={email:form.elements.email.value.trim(),password:form.elements.password.value,challenge};
-    if(mode==='setup')data.resend_key=form.elements.resend_key.value.trim();
+    if(mode==='setup')data.resend_key=$('#resend_key').value.trim();
+    else if($('#replacement-key').value.trim())data.resend_key=$('#replacement-key').value.trim();
     try{
-      const response=await fetch(mode==='setup'?'/api/auth/setup':'/api/auth/request',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(data)});
-      const obj=await response.json();
-      if(!response.ok){const error=new Error(obj.error||'Unable to complete request');error.retryAfter=obj.retry_after||0;throw error;}
-      if(mode==='setup'){
-        mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first eight-digit verification code was sent. Enter it below to unlock Meridian.';
-        provider.hidden=true;form.elements.resend_key.required=false;submit.textContent='Email me another eight-digit code';form.elements.resend_key.value='';
-        message.className='good';message.textContent='Verification code sent. Another email can be requested after the one-minute cooldown.';
-      }else{message.className='good';message.textContent='An eight-digit code has been sent to your authorized inbox. It expires in 10 minutes.';}
-      storePending(challenge);
-      codeBox.value='';
-      showCode(challenge);
-      form.elements.password.value='';
-    }catch(e){
-      const existing=readPending();
-      const wait=e.retryAfter>0?' Try again in '+(e.retryAfter>=60?Math.ceil(e.retryAfter/60)+' minute(s)':e.retryAfter+' seconds')+'.':'';
-      if(existing){existingButton.hidden=false;message.textContent=(e.message||'Unable to send email')+wait+' If you already received a code, use the button below.';}
-      else message.textContent=(e.message||'Unexpected error')+wait;
-    }
-    finally{submit.disabled=false;}
+      const result=await post(mode==='setup'?'/api/auth/setup':'/api/auth/request',data);
+      mode='login';provider.hidden=true;$('#resend_key').required=false;$('#resend_key').value='';$('#replacement-key').value='';$('#email-settings').hidden=false;
+      form.elements.password.value='';$('#password').autocomplete='current-password';
+      const p={challenge,until:result.expires_at?result.expires_at*1000:Date.now()+600000,emailId:result.email_id||''};
+      save(pendingKey,p);setCooldown(result.retry_after||60);codeBox.value='';showCode(p);
+    }catch(err){
+      setCooldown(err.retryAfter);message.textContent=err.message;existingButton.hidden=!readPending();
+    }finally{sending=false;updateCooldown();}
   });
-  codeForm.addEventListener('submit',async event=>{
-    event.preventDefault();
-    if(!activeChallenge){codeMessage.textContent='Sign-in request expired. Request a new code.';return;}
-    const code=codeBox.value.replace(/\s+/g,'');
-    if(!/^[0-9]{8}$/.test(code)){codeMessage.textContent='Enter all eight digits from your email.';return;}
-    codeSubmit.disabled=true;
-    codeMessage.textContent='Verifying your email code…';
-    try{
-      const response=await fetch('/api/auth/confirm-code',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({challenge:activeChallenge,code})});
-      const result=await response.json();
-      if(!response.ok)throw Error(result.error||'Code could not be verified');
-      if(polling){clearInterval(polling);polling=null;}
-      clearPending();codeBox.value='';
-      location.replace('/');
-    }catch(error){codeMessage.textContent=error.message||'Unable to verify code.';}
+  codeBox.addEventListener('input',()=>{codeBox.value=codeBox.value.replace(/\D/g,'').slice(0,8);});
+  codeForm.addEventListener('submit',async e=>{
+    e.preventDefault();if(!active||active.until<=Date.now()){expire();return;}
+    const code=codeBox.value.replace(/\s+/g,'');if(!/^\d{8}$/.test(code)){codeMessage.textContent='Enter all eight digits from the email.';return;}
+    stopPolling();codeSubmit.disabled=true;codeMessage.textContent='Verifying…';
+    try{await post('/api/auth/confirm-code',{challenge:active.challenge,code});clearPending();codeBox.value='';location.replace('/');}
+    catch(err){codeMessage.textContent=err.message;poll();}
     finally{codeSubmit.disabled=false;}
   });
-  existingButton.addEventListener('click',()=>{const saved=readPending();if(saved)showCode(saved.challenge);else{existingButton.hidden=true;message.textContent='Your pending code expired; request a new one.';}});
-  document.querySelector('#code-back').addEventListener('click',()=>{
-    if(polling){clearInterval(polling);polling=null;}
-    codeBox.value='';codeForm.hidden=true;form.hidden=false;
-    heading.textContent='Sign in to Meridian';description.textContent='Your existing email code can still be entered below. You can request another only after the cooldown.';
-    existingButton.hidden=!readPending();
-    message.textContent='The previous code remains valid. You can return to it without sending another email.';
-  });
-
+  existingButton.addEventListener('click',()=>{const p=readPending();if(p)showCode(p);else expire();});
+  $('#code-back').addEventListener('click',()=>{showLogin();message.textContent=readPending()?'Your existing code still works. Return to it below without sending another email.':'';});
+  document.addEventListener('visibilitychange',()=>{updateCooldown();if(document.hidden)stopPolling();else if(!codeForm.hidden)poll();});
+  window.addEventListener('pagehide',()=>{stopPolling();clearTimeout(cooldownTimer);});
 })();

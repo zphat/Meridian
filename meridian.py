@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.13"
+VERSION = "0.2.14"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -97,6 +97,11 @@ class Meridian:
         self.busy = False
         self.last_sync_error = ""
         self._stop = threading.Event()
+        self._wake = threading.Event()
+        self.started_at=time.time()
+        self._http_cache={}
+        self._tls_cache={}
+        self._github_pause_until=0
         self.update_state = {"state": "not_checked", "current": VERSION, "repository": UPDATE_REPO, "checked_at": None, "release_url": None, "installer_url": None}
         self._update_busy = False
         self.tray_icon = None  # Windows packaged build can issue a system notification.
@@ -111,6 +116,8 @@ class Meridian:
         with self.lock, self.conn:
             self.conn.executescript("""
             PRAGMA journal_mode=WAL;
+            PRAGMA cache_size=-4096;
+            PRAGMA busy_timeout=5000;
             CREATE TABLE IF NOT EXISTS goals (id INTEGER PRIMARY KEY, project TEXT NOT NULL, title TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'medium', category TEXT NOT NULL DEFAULT 'General', description TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'todo', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT);
             CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, project TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS decisions (id INTEGER PRIMARY KEY, project TEXT NOT NULL, title TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
@@ -120,6 +127,9 @@ class Meridian:
             CREATE TABLE IF NOT EXISTS downloads (id INTEGER PRIMARY KEY, project TEXT NOT NULL, release_tag TEXT NOT NULL, asset TEXT NOT NULL, counted_at TEXT NOT NULL, total INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS web_analytics (project TEXT NOT NULL, date TEXT NOT NULL, visitors INTEGER NOT NULL, pageviews INTEGER NOT NULL, PRIMARY KEY(project,date));
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS site_time ON site_samples(project,url,checked_at);
+            CREATE INDEX IF NOT EXISTS download_asset_time ON downloads(project,release_tag,asset,counted_at);
+            CREATE INDEX IF NOT EXISTS event_time ON events(happened_at);
             """)
             if not self.conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]:
                 now=iso_now()
@@ -129,7 +139,7 @@ class Meridian:
             if not self.conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]:
                 for p,val in SEED_SNAPSHOTS.items():
                     self.conn.execute("INSERT INTO cache(key,json,checked_at,error) VALUES(?,?,?,?)", ("github:"+p,json.dumps(val),"2026-10-29T08:29:00+00:00","Initial verified snapshot; refresh pending"))
-            for k, v in {"github_minutes":"30", "site_minutes":"5"}.items():
+            for k, v in {"github_minutes":"30", "site_minutes":"5","monitor_mode":"balanced"}.items():
                 self.conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",(k,v))
 
     def _get(self, sql, args=()):
@@ -146,15 +156,26 @@ class Meridian:
         return {x["key"]:x["value"] for x in self._get("SELECT * FROM settings")}
 
     def _github_get(self, path):
+        if self._stop.is_set():raise RuntimeError('Meridian is closing')
+        if time.time()<self._github_pause_until:
+            raise RuntimeError('GitHub rate limit reached. Automatic requests resume after '+dt.datetime.fromtimestamp(self._github_pause_until,dt.timezone.utc).strftime('%H:%M UTC'))
         url="https://api.github.com"+path
         headers={"Accept":"application/vnd.github+json", "User-Agent": UA, "X-GitHub-Api-Version":"2022-11-28"}
         token=os.environ.get("MERIDIAN_GITHUB_TOKEN", "").strip()
         if token: headers["Authorization"]="Bearer "+token
+        cached=self._http_cache.get(path)
+        if cached and cached[0]:headers['If-None-Match']=cached[0]
         req=urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(req,timeout=13) as resp:
-                return json.loads(resp.read(1400000).decode("utf-8"))
+                result=json.loads(resp.read(1400000).decode("utf-8"))
+                self._http_cache[path]=(resp.headers.get('ETag'),result)
+                return result
         except urllib.error.HTTPError as e:
+            if e.code==304 and cached:return cached[1]
+            if e.code in (403,429) and (e.headers.get('X-RateLimit-Remaining')=='0' or e.code==429):
+                try:self._github_pause_until=max(time.time()+60,float(e.headers.get('X-RateLimit-Reset',time.time()+3600)))
+                except ValueError:self._github_pause_until=time.time()+3600
             msg=e.read(800).decode("utf-8",errors="replace")
             raise RuntimeError("GitHub HTTP %s: %s"%(e.code,msg[:160])) from e
 
@@ -183,6 +204,7 @@ class Meridian:
 
     def github_sync(self):
         for p,config in PROJECTS.items():
+            if self._stop.is_set():break
             name=config["repository"]
             try:
                 repo=self._github_get("/repos/"+name)
@@ -192,10 +214,17 @@ class Meridian:
                 issues=self._github_get("/repos/"+name+"/issues?state=open&per_page=40")
                 latest=releases[0] if releases else None
                 runs=workflows.get("workflow_runs",[])
-                ci=next((r for r in runs if r.get("name","").lower() not in ("uptime","health","monitor") and r.get("status")=="completed"),None)
-                uptime=next((r for r in runs if r.get("name","").lower() in ("uptime","health","monitor")),None)
+                is_monitor=lambda r:bool(re.search(r'\b(uptime|health|monitor)\b',r.get('name',''),re.I))
+                builds=[r for r in runs if not is_monitor(r) and r.get('head_branch',repo.get('default_branch'))==repo.get('default_branch')]
+                ci=next(iter(builds),None)
+                uptime=next((r for r in runs if is_monitor(r)),None)
                 relevant_releases=[{"tag_name":r.get("tag_name"),"name":r.get("name"),"published_at":r.get("published_at"),"html_url":r.get("html_url"),"prerelease":r.get("prerelease",False),"assets":[{"name":a.get("name"),"download_count":a.get("download_count",0)} for a in r.get("assets",[])]} for r in releases]
                 obj={"repo":{"full_name":name,"description":repo.get("description"),"pushed_at":repo.get("pushed_at"),"open_issues_count":repo.get("open_issues_count"),"default_branch":repo.get("default_branch")},"release":relevant_releases[0] if relevant_releases else None,"releases":relevant_releases,"ci":({k:ci.get(k) for k in ("name","status","conclusion","html_url","created_at")} if ci else None),"uptime_workflow":({k:uptime.get(k) for k in ("name","status","conclusion","html_url","created_at")} if uptime else None),"commits":[{"sha":c.get("sha"),"message":c.get("commit",{}).get("message","").split("\n")[0],"date":c.get("commit",{}).get("committer",{}).get("date"),"url":c.get("html_url")} for c in commits],"issues":[{"number":i.get("number"),"title":i.get("title"),"url":i.get("html_url"),"pull_request":bool(i.get("pull_request"))} for i in issues],"roadmap":self._roadmap(name,repo.get("default_branch") or "main"),"fetched_at":iso_now()}
+                # A sample of recent default-branch runs, separate from the
+                # current build status. Cancelled/skipped runs are not failures.
+                completed=[r for r in builds if r.get('conclusion') in ('success','failure','timed_out','action_required')]
+                obj['build_stats']={'sampled':len(completed),'passed':sum(r.get('conclusion')=='success' for r in completed),
+                    'pending':sum(r.get('status')!='completed' for r in builds),'latest_runs':len(builds)}
                 self._cache("github:"+p,obj)
                 events=[]
                 for r in releases[:4]:
@@ -209,6 +238,8 @@ class Meridian:
                             if safe_download_asset(a):
                                 self.conn.execute("INSERT INTO downloads(project,release_tag,asset,counted_at,total) VALUES(?,?,?,?,?)",(p,r.get("tag_name",""),a["name"],iso_now(),int(a.get("download_count",0))))
                     self.conn.execute("DELETE FROM downloads WHERE id NOT IN (SELECT MAX(id) FROM downloads GROUP BY project,release_tag,asset,date(counted_at))")
+                    self.conn.execute("DELETE FROM downloads WHERE counted_at<?",((dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=90)).isoformat(),))
+                    self.conn.execute("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY happened_at DESC,id DESC LIMIT 3000)")
             except Exception as e:
                 self._cache("github:"+p,None,str(e))
 
@@ -231,6 +262,10 @@ class Meridian:
         # HTTP probes validate TLS during connection. Read expiry separately so the
         # dashboard can warn about upcoming renewal failures, not just failures today.
         if result["success"] and urllib.parse.urlsplit(url).scheme == "https":
+            cached=self._tls_cache.get(urllib.parse.urlsplit(url).netloc)
+            if cached and cached[0]>time.time():
+                result['tls_days']=int((cached[1]-time.time())//86400)
+                return result
             try:
                 host=urllib.parse.urlsplit(url).hostname
                 port=urllib.parse.urlsplit(url).port or 443
@@ -238,6 +273,7 @@ class Meridian:
                     with ssl.create_default_context().wrap_socket(raw,server_hostname=host) as secured:
                         exp=ssl.cert_time_to_seconds(secured.getpeercert()["notAfter"])
                         result["tls_days"]=max(-999, int((exp-time.time())//86400))
+                        self._tls_cache[urllib.parse.urlsplit(url).netloc]=(time.time()+21600,exp)
             except (OSError,ValueError,KeyError,ssl.SSLError):
                 pass  # A failed expiry lookup is unknown, not proof of bad TLS.
         return result
@@ -245,10 +281,13 @@ class Meridian:
     def site_sync(self):
         for p,config in PROJECTS.items():
             for label,url,typ in config["sites"]:
+                if self._stop.is_set():return
                 d=self.check_url(url,typ=="health")
                 with self.lock,self.conn:
                     self.conn.execute("INSERT INTO site_samples(project,label,url,checked_at,success,status,latency_ms,tls_days,error) VALUES(?,?,?,?,?,?,?,?,?)",(p,label,url,iso_now(),int(d["success"]),d["status"],d["latency_ms"],d["tls_days"],d["error"]))
-                    self.conn.execute("DELETE FROM site_samples WHERE id IN (SELECT id FROM site_samples WHERE project=? AND url=? ORDER BY id DESC LIMIT -1 OFFSET 600)",(p,url))
+                    cutoff=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=14)).isoformat(timespec='seconds')
+                    self.conn.execute("DELETE FROM site_samples WHERE checked_at<?",(cutoff,))
+                    self.conn.execute("DELETE FROM site_samples WHERE id IN (SELECT id FROM site_samples WHERE project=? AND url=? ORDER BY id DESC LIMIT -1 OFFSET 5000)",(p,url))
 
     def run_sync(self,kind="all"):
         with self.lock:
@@ -364,22 +403,37 @@ class Meridian:
         threading.Thread(target=self.check_updates,daemon=True,name="MeridianUpdateCheck").start()
         return True
 
+    def set_monitor_mode(self,mode):
+        if mode not in ('balanced','quiet','paused'):raise ValueError('Choose balanced, quiet or paused monitoring')
+        with self.lock,self.conn:
+            self.conn.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('monitor_mode',?)",(mode,))
+        self._wake.set()
+
+    def state_revision(self):
+        with self.lock:
+            return '"'+str(self.started_at)+':'+str(self.conn.total_changes)+':'+str(self.busy)+':'+str(self._update_busy)+':'+str(self.update_state.get('checked_at'))+':'+str(int(time.time()//60))+'"'
+
     def _loop(self):
-        # First refresh on startup. Continue while the local dashboard is open.
-        next_gh=0.;next_sites=0.;next_updates=0.
+        # Wait until the next job is due; avoid waking every five seconds.
+        next_gh=0.;next_sites=0.;next_updates=0.;previous_mode=None
         while not self._stop.is_set():
+            self._wake.clear()
+            mode=self._settings().get('monitor_mode','balanced')
+            if mode!=previous_mode:next_gh=next_sites=0;previous_mode=mode
+            gh_interval,site_interval=(3600,900) if mode=='quiet' else (1800,300)
             now=time.monotonic()
             if now>=next_updates:
                 self.check_updates_async()
                 next_updates=time.monotonic()+6*3600
-            if now>=next_gh:
+            if mode!='paused' and now>=next_gh:
                 self.run_sync("github")
-                next_gh=time.monotonic()+1800
+                next_gh=time.monotonic()+gh_interval
             if self._stop.is_set():break
-            if time.monotonic()>=next_sites:
+            if mode!='paused' and time.monotonic()>=next_sites:
                 self.run_sync("sites")
-                next_sites=time.monotonic()+300
-            self._stop.wait(5)
+                next_sites=time.monotonic()+site_interval
+            due=[next_updates] if mode=='paused' else [next_gh,next_sites,next_updates]
+            self._wake.wait(max(1,min(due)-time.monotonic()))
 
     def snapshot(self):
         with self.lock:
@@ -391,7 +445,6 @@ class Meridian:
             sites=self._get("SELECT s.* FROM site_samples s INNER JOIN (SELECT project,url,MAX(id) mid FROM site_samples GROUP BY project,url) x ON x.mid=s.id ORDER BY s.project,s.id")
             analytics=self._get("SELECT * FROM web_analytics ORDER BY date DESC LIMIT 1200")
             dl=self._get("SELECT * FROM downloads WHERE id IN (SELECT MAX(id) FROM downloads GROUP BY project,release_tag,asset) ORDER BY counted_at DESC")
-            dl_series=self._get("SELECT project,substr(counted_at,1,10) date,MAX(total) total FROM downloads GROUP BY project,release_tag,asset,substr(counted_at,1,10) ORDER BY date DESC LIMIT 3000")
             site_series=self._get("SELECT project,label,substr(checked_at,1,10) day,COUNT(*) checks,SUM(success) passed FROM site_samples GROUP BY project,label,substr(checked_at,1,10) ORDER BY day DESC LIMIT 210")
             # Forty-eight hourly groups from actual sampled checks, never interpolated.
             # Older periods and offline periods are absent and displayed as unknown.
@@ -401,6 +454,12 @@ class Meridian:
                 MAX(checked_at) last_checked FROM site_samples
                 WHERE checked_at>=? GROUP BY project,url,substr(checked_at,1,13)
                 ORDER BY hour""",(cutoff,))
+            last_day=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=24)).isoformat(timespec='seconds')
+            site_metrics=self._get("""SELECT project,url,label,COUNT(*) checks,SUM(success) passed,
+                ROUND(AVG(CASE WHEN success=1 THEN latency_ms END)) avg_latency_ms,
+                MAX(CASE WHEN success=1 THEN latency_ms END) max_latency_ms,
+                COUNT(DISTINCT substr(checked_at,1,13)) sampled_hours
+                FROM site_samples WHERE checked_at>=? GROUP BY project,url""",(last_day,))
             # Preserve the asset name/tag in history. Summing daily MAX values across
             # different installer assets would otherwise lose which release they belong to.
             dl_series=self._get("""SELECT project,release_tag,asset,
@@ -416,7 +475,8 @@ class Meridian:
                 release=gh["data"].get("release") or {}
                 obj["latest_downloads"]=sum(int(a.get("total",0)) for a in dl if a["project"]==p and a["release_tag"]==release.get("tag_name", ""))
                 project_details.append(obj)
-            return {"projects":project_details,"goals":goals,"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state)}
+            return {"projects":project_details,"goals":goals,"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
+                "runtime":{"uptime_seconds":int(time.time()-self.started_at),'database_bytes':sum(p.stat().st_size for p in self.data_dir.glob('meridian.sqlite3*') if p.is_file()),'probe_retention_days':14,'download_retention_days':90}}
 
     def insert(self,table,data):
         cols={"goals":{"project","title","priority","category","description","state"},"notes":{"project","title","body"},"decisions":{"project","title","reason"}}[table]
@@ -499,11 +559,12 @@ class Meridian:
 
     def close(self):
         self._stop.set()
-        if self.worker:self.worker.join(timeout=1)
+        self._wake.set()
+        if self.worker:self.worker.join(timeout=20)
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.13"
+    server_version="Meridian/0.2.14"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -553,12 +614,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('Referrer-Policy','no-referrer')
-        self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers();self.wfile.write(raw)
 
-    def reply(self,value,code=200):
+    def reply(self,value,code=200,etag=None):
         raw=json.dumps(value,ensure_ascii=False).encode("utf-8")
-        self.send_response(code);self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(raw)));self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer");self.end_headers();self.wfile.write(raw)
+        self.send_response(code);self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(raw)));self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer")
+        if etag:self.send_header('ETag',etag)
+        self.end_headers();self.wfile.write(raw)
 
     def body(self):
         size=int(self.headers.get("Content-Length","0"))
@@ -590,7 +653,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self.session_valid():
             if path.startswith('/api/'):return self.reply({'error':'Sign-in required'},401)
             return self.send_auth_html()
-        if path=="/api/state":return self.reply(self.app.snapshot())
+        if path=="/api/state":
+            revision=self.app.state_revision()
+            if self.headers.get('If-None-Match')==revision:
+                self.send_response(304);self.send_header('ETag',revision);self.send_header('Cache-Control','no-store');self.end_headers();return
+            return self.reply(self.app.snapshot(),etag=revision)
         if path=="/api/backup":return self.reply(self.app.backup())
         if path=="/":path="/index.html"
         return self.serve_static(path)
@@ -600,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
         candidate=(STATIC/path.lstrip("/")).resolve()
         if not candidate.is_relative_to(STATIC.resolve()) or not candidate.is_file():return self.send_error(404)
         mime={".html":"text/html; charset=utf-8",".js":"application/javascript; charset=utf-8",".css":"text/css; charset=utf-8",".svg":"image/svg+xml",".png":"image/png"}.get(candidate.suffix,"application/octet-stream")
-        raw=candidate.read_bytes();self.send_response(200);self.send_header("Content-Type",mime);self.send_header("Content-Length",str(len(raw)));self.send_header("Cache-Control","no-store");self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer");self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");self.end_headers();self.wfile.write(raw)
+        raw=candidate.read_bytes();self.send_response(200);self.send_header("Content-Type",mime);self.send_header("Content-Length",str(len(raw)));self.send_header("Cache-Control","no-store");self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer");self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");self.end_headers();self.wfile.write(raw)
 
     def do_POST(self):self.mutate("POST")
     def do_PATCH(self):self.mutate("PATCH")
@@ -616,16 +683,18 @@ class Handler(BaseHTTPRequestHandler):
                 email=body.get('email'); password=body.get('password')
                 self.app.auth.configure(email,password,body.get('resend_key'))
                 host=self.headers.get('Host','')
-                try:self.app.auth.issue_link(email,password,'http://'+host,challenge=body.get('challenge'))
+                try:result=self.app.auth.issue_link(email,password,'http://'+host,challenge=body.get('challenge'))
                 except AuthError:
                     self.app.auth.rollback_setup()
                     raise
-                return self.reply({'ok':True,'link_sent':True},201)
+                return self.reply({**result,'link_sent':True},201)
             if path=="/api/auth/request" and method=="POST":
                 host=self.headers.get('Host','')
                 remote=(urllib.parse.urlsplit('//'+host).hostname or '') not in ('127.0.0.1','localhost')
                 origin=('https://' if remote else 'http://')+host
-                return self.reply(self.app.auth.issue_link(body.get('email'),body.get('password'),origin,challenge=body.get('challenge')))
+                key=body.get('resend_key')
+                if key is not None and remote:return self.reply({'error':'Email settings can only be changed in the local desktop'},403)
+                return self.reply(self.app.auth.issue_link(body.get('email'),body.get('password'),origin,challenge=body.get('challenge'),resend_api_key=key))
             if path=="/api/auth/handoff" and method=="POST":
                 cookie=self.app.auth.redeem_handoff(body.get('challenge'))
                 if cookie is None:return self.reply({'authenticated':False})
@@ -655,6 +724,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(204);self.send_header('Set-Cookie','meridian_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
                 self.send_header('Cache-Control','no-store');self.end_headers();return
             if not self.session_valid():return self.reply({'error':'Sign-in required'},401)
+            if path=='/api/settings/monitoring' and method=='POST':
+                self.app.set_monitor_mode(body.get('mode'))
+                return self.reply({'ok':True})
             if path=="/api/refresh" and method=="POST":return self.reply({"started":self.app.refresh_async(body.get("kind","all"))})
             if path=="/api/updates/check" and method=="POST":return self.reply({"started":self.app.check_updates_async()})
             if path=="/api/analytics/import" and method=="POST":return self.reply({"imported":self.app.import_csv(body.get("csv",""),body.get("project",""))})

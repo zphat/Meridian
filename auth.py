@@ -66,20 +66,24 @@ class AuthManager:
             return bool(row and row[0]>int(time.time()))
     def _recent(self,category,seconds):
         return self.conn.execute('SELECT COUNT(*) FROM auth_attempts WHERE category=? AND at>=?',(category,int(time.time())-seconds)).fetchone()[0]
-    def issue_link(self,email,password,origin_url,sender=None,challenge=None):
+    def issue_link(self,email,password,origin_url,sender=None,challenge=None,resend_api_key=None):
         if not self.configured():raise AuthError('Set up Meridian authentication first',503)
         if not isinstance(email,str) or not isinstance(password,str):raise AuthError('Invalid sign-in details',401)
         cfg=self._get_config()
         with self.lock:
             if self._recent('attempt',900)>=12:raise AuthError('Too many attempts; try again later',429)
-            self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'attempt'))
-            # Persist failed attempts BEFORE verifying credentials. Otherwise an
-            # AuthError inside a connection context rolls back the rate limit.
-            self.conn.commit()
             salt=base64.b64decode(cfg['salt']);expected=base64.b64decode(cfg['password_hash'])
             result=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32)
-            if not hmac.compare_digest(result,expected) or not hmac.compare_digest(email.strip().lower(),cfg['email']):
+            if not hmac.compare_digest(result,expected) or not hmac.compare_digest(email.strip().lower().encode(),cfg['email'].encode()):
+                # Only wrong credentials consume the failed-login allowance.
+                # Cooldown clicks and provider errors must not lock out the owner.
+                self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'attempt'))
+                self.conn.commit()
                 raise AuthError('Email or password not recognized',401)
+            if resend_api_key is not None:
+                if not isinstance(resend_api_key,str) or not resend_api_key.strip().startswith('re_') or len(resend_api_key.strip())<12:
+                    raise AuthError('Enter a valid Resend API key')
+                cfg={**cfg,'resend_key':resend_api_key.strip()}
             # A local, password-verified owner should not get locked out for a
             # whole day because old releases sent a few unusable magic links.
             # Six messages/day and one/minute cap delivery, with no bypass for
@@ -88,7 +92,8 @@ class AuthManager:
             last=self.conn.execute("SELECT MAX(at) FROM auth_attempts WHERE category='mail'").fetchone()[0]
             retry=max(0,60-(int(time.time())-int(last))) if last else 0
             if day>=6:
-                raise AuthError('Daily email limit reached (six sign-in emails in 24 hours). Please use a code already sent, or try again tomorrow.',429,86400)
+                oldest=self.conn.execute("SELECT at FROM auth_attempts WHERE category='mail' ORDER BY at DESC LIMIT 1 OFFSET 5").fetchone()[0]
+                raise AuthError('Daily email limit reached (six sign-in emails in 24 hours). Use an unexpired code already sent, or wait for the next available request.',429,max(1,int(oldest)+86401-int(time.time())))
             if retry:
                 raise AuthError('A verification email was sent recently. Check your inbox, or request another code after the cooldown.',429,retry)
             # Challenge belongs only to the waiting app window; never include it in the email.
@@ -97,7 +102,7 @@ class AuthManager:
             token=secrets.token_urlsafe(32);url=origin_url.rstrip('/')+'/auth/verify?token='+token
             code=f'{secrets.randbelow(100000000):08d}' if challenge else None
             deliver=sender or self._send_resend
-            deliver({**cfg,'_one_time_code':code},url)
+            receipt=deliver({**cfg,'_one_time_code':code},url)
             expires=int(time.time())+600
             self.conn.execute('INSERT INTO auth_magic(token_hash,expires) VALUES(?,?)',(self._hash(token),expires))
             if challenge is not None:
@@ -106,7 +111,14 @@ class AuthManager:
                 self.conn.execute('INSERT OR REPLACE INTO auth_codes(challenge_hash,code_hash,expires,attempts) VALUES(?,?,?,0)',(challenge_hash,self._hash(challenge+':'+code),expires))
             self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'mail'))
             self.conn.commit()
-            return {'ok':True,'message':'An eight-digit verification code was sent to the authorized inbox.'}
+            if resend_api_key is not None:
+                # Save a replacement key only after the provider accepts it.
+                temp=self.path.with_name('auth.json.pending')
+                fd=os.open(str(temp),os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+                with os.fdopen(fd,'w',encoding='utf-8') as out:json.dump(cfg,out)
+                os.replace(temp,self.path)
+            return {'ok':True,'message':'Resend accepted your verification email. Check your inbox and spam folder.',
+                    'expires_at':expires,'retry_after':60,'email_id':receipt}
     @staticmethod
     def _send_resend(cfg,url):
         # Auth emails must not contain clickable HTML links: provider click
@@ -135,12 +147,40 @@ class AuthManager:
             'subject':'Your Meridian sign-in code','text':content,'html':html}).encode()
         req=urllib.request.Request('https://api.resend.com/emails',data=data,headers={
             'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json',
-            'User-Agent':'Meridian/0.2.12'},method='POST')
+            'User-Agent':'MeridianDesktop'},method='POST')
         try:
             with urllib.request.urlopen(req,timeout=12) as response:
                 if response.status not in (200,201,202):raise AuthError('Email service unavailable',502)
-        except (urllib.error.URLError,TimeoutError) as e:
-            raise AuthError('Email delivery failed. Check the Resend account and API key.',502) from e
+                try:receipt=json.loads(response.read(16000))
+                except (ValueError,UnicodeDecodeError):raise AuthError('Resend returned an unreadable response. Check its email log before retrying.',502)
+                if not isinstance(receipt,dict) or not isinstance(receipt.get('id'),str):
+                    raise AuthError('Resend did not confirm acceptance. Check its email log before retrying.',502)
+                return receipt['id']
+        except urllib.error.HTTPError as e:
+            try:detail=json.loads(e.read(16000))
+            except (ValueError,UnicodeDecodeError):detail={}
+            if not isinstance(detail,dict):detail={}
+            name=str(detail.get('name',''));reason=str(detail.get('message','')).lower()
+            # Map known failures to useful, secret-free explanations. Never
+            # reflect arbitrary provider responses, tokens or addresses in UI.
+            if 'only send testing emails' in reason:
+                explanation='Resend only allows its test sender to email the address used for your Resend account. Use a key from the Resend account registered to your authorized inbox.'
+            elif e.code==401 or 'api key is invalid' in reason or name in ('missing_api_key','invalid_api_key'):
+                explanation='Resend rejected the API key. Open Fix email delivery below and enter a current Sending access key.'
+            elif 'not verified' in reason:
+                explanation='Resend rejected the sender domain. Check the sending-domain settings in your Resend account.'
+            elif name in ('daily_quota_exceeded','monthly_quota_exceeded','email_above_quota'):
+                explanation='Your Resend account has reached its sending quota. Check Resend usage before trying again.'
+            elif e.code==403:
+                explanation='Resend denied sending access. Check that the key is active, permits sending, and belongs to the account for your authorized inbox.'
+            elif e.code==429:
+                explanation='Resend is temporarily rate-limiting requests. Wait a minute before trying again.'
+            elif e.code>=500:
+                explanation='Resend is temporarily unavailable. Your email settings have not been changed.'
+            else:explanation='Resend rejected the email request. Check the Resend email log for the reason.'
+            raise AuthError(explanation,502,60 if e.code==429 else 0) from e
+        except (urllib.error.URLError,TimeoutError,OSError) as e:
+            raise AuthError('Could not reach Resend. Check your internet connection, VPN or firewall, then retry.',502) from e
 
     def confirm_code(self,challenge,code):
         """Redeem a one-time code only into its original waiting app window."""

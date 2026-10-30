@@ -1,7 +1,7 @@
 name: Validate Meridian private access
 on:
   push:
-    branches: [feature/private-magic-link-v028]
+    branches: [main, fix/windows-upgrade-and-signin-v0214]
   pull_request:
     branches: [main]
 permissions:
@@ -31,3 +31,16 @@ jobs:
             echo 'Private owner data was committed' >&2
             exit 1
           fi
+      - name: Check analytics calculations
+        run: node tests/metrics.test.cjs
+      - name: Install browser test tooling (not shipped)
+        run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps chromium
+      - name: Verify real browser setup, sign-in, layouts and quiet behavior
+        run: node tests/browser_smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Meridian-UI-checks
+          path: test-artifacts/

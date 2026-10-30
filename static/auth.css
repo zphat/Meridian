@@ -4,3 +4,6 @@
 #code-message{min-height:18px;color:#f2d4a4;font-size:13px;line-height:1.6;margin-top:16px}
 #code-back.secondary{border:1px solid #3c4d42;background:transparent;color:#c7ddce;margin-top:10px}
 #code-back.secondary:hover{background:#27392e}
+
+#email-settings{margin-top:20px;border-top:1px solid #29372f;padding-top:16px}summary{font-size:13px;cursor:pointer;color:#b7c9b9}#delivery-reference{overflow-wrap:anywhere;font-size:10px}.secondary{background:transparent;border:1px solid #3c4d42;color:#c7ddce}.secondary:hover{background:#27392e}button:disabled{cursor:default}
+@media(max-height:700px){.shell{margin:24px auto}.identity{margin-bottom:18px}.panel{padding:24px}h1{margin-top:18px}.lead{margin-bottom:16px}}

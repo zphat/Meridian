@@ -52,6 +52,7 @@ class AuthUnitTests(unittest.TestCase):
         payload=[]
         class FakeHTTP:
             status=200
+            def read(self,*args):return b'{"id":"email-test-receipt"}'
             def __enter__(self):return self
             def __exit__(self,*args):return False
         def fake_send(request,timeout=None):
@@ -101,7 +102,8 @@ class AuthUnitTests(unittest.TestCase):
             self.app.auth.issue_link('owner@example.com','a long test secret',
                 'http://127.0.0.1:8765',lambda cfg,url:self.fail('email should not be sent'))
         self.assertEqual(blocked.exception.status,429)
-        self.assertEqual(blocked.exception.retry_after,86400)
+        self.assertGreater(blocked.exception.retry_after,86000)
+        self.assertLess(blocked.exception.retry_after,86400)
 
     def test_mail_throttle(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
@@ -126,6 +128,19 @@ class AuthHttpTests(unittest.TestCase):
         head.update(headers or {})
         conn.request(method,path,payload,headers=head)
         r=conn.getresponse();body=r.read();result=(r.status,dict(r.getheaders()),body);conn.close();return result
+    def test_state_conditional_requests_still_require_a_session(self):
+        self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
+        sent=[]
+        self.app.auth.issue_link('owner@example.com','a long test secret','http://127.0.0.1',lambda c,u:sent.append(u))
+        cookie='meridian_session='+self.app.auth.redeem(sent[0].split('token=')[1])
+        status,headers,_=self.req('GET','/api/state',headers={'Cookie':cookie})
+        self.assertEqual(status,200)
+        etag=headers['ETag']
+        self.assertEqual(self.req('GET','/api/state',headers={'Cookie':cookie,'If-None-Match':etag})[0],304)
+        self.assertEqual(self.req('GET','/api/state',headers={'If-None-Match':etag})[0],401)
+        self.app.insert('notes',dict(project='latitude',title='Changed',body='Changed'))
+        self.assertEqual(self.req('GET','/api/state',headers={'Cookie':cookie,'If-None-Match':etag})[0],200)
+
     def test_login_prompts_for_an_email_code(self):
         html=self.req('GET','/')[2].decode('utf-8')
         self.assertIn('Email me an eight-digit code',html)

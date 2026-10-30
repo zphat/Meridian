@@ -1,67 +1,62 @@
-# Meridian 0.2.13
+# Meridian 0.2.14
 
-Local-first personal control center for Latitude, Longitude, and Sundial.
+A local development dashboard for Latitude, Longitude and Sundial. Your goals, notes, decisions and email credentials stay on your computer.
 
-## What is new
+## Install or upgrade
 
-- Labeled green, amber, red monitoring lights with stale checks shown as unverified
-- Actual 48-hour hourly availability samples, not invented uptime
-- Per-project installer download totals and imported visitor counts
-- Smaller actionable goal lists and collapsible completed tasks
-- Copyable ChatGPT/Claude troubleshooting prompts using available monitoring evidence
+Download the Windows installer or Linux package from [GitHub Releases](https://github.com/zphat/Meridian/releases/latest). Windows installs per user and downloads a pinned, SHA-256-verified Python runtime on the first installation. The Windows installer is not code signed.
 
-## Windows
+Version 0.2.14 fixes the `Meridian.exe: Access is denied` upgrade failure. Setup prepares the new files, closes only this installation's native window and backend, waits for them to exit, and replaces the application. If replacement fails, the previous application files are restored. Notes, authentication settings and the database are outside the installation directory and are preserved. Running setup again repairs a partially completed earlier installation.
 
-Run `Meridian-Setup-0.2.13.exe` (compiled, x64). It installs to your user profile with Start Menu and desktop links, and fetches a pinned, verified Python embeddable runtime during first installation. Requires internet at first install. It is not code signed.
+The native WebView2 window, Start Menu link and desktop shortcut share the lime asterisk icon and `Meridian.Desktop` identity. A second launch focuses the existing window. External HTTPS links open in your default browser. Windows may keep a separately pinned old Edge shortcut; remove that obsolete pin and pin the new Meridian window if needed.
 
-## GitHub updates
+## Private access
 
-The updater checks `zphat/Meridian` on startup and periodically. This repository is public. Meridian checks its public GitHub Releases feed at launch and periodically, shows a notification when a newer version is available, and lets you choose whether to install it. A published release containing the Windows installer is required before the channel can report an available update. No GitHub token is embedded in the installer.
+On first launch, enter your authorized email, choose a password and supply a Resend Sending access API key. With the default `onboarding@resend.dev` sender, the recipient must be the email registered to the Resend account. Nothing is bundled with your private credentials.
 
-## Local project data
+Enter the emailed eight-digit code in the same Meridian window. Codes expire after ten minutes, work once and allow five wrong-code attempts. A pending request survives a page reload in that window. Optional email links remain compatible with previous releases, but the code avoids mail-provider link redirects. Sessions expire after twelve hours; use **Lock** to end one sooner.
 
-Notes, goals, decisions, samples, downloads and snapshots are stored in the local user's `.meridian/meridian.sqlite3` and aren't shipped with builds or uploaded to GitHub. Back up data from Settings.
+Email requests allow one per minute and six per rolling 24 hours. The UI shows the actual remaining cooldown. Wrong passwords have a separate limit; cooldown clicks and delivery errors do not consume it. Resend acceptance is not proof of inbox delivery: check spam and the Resend email log if needed. Provider rejections explain whether the problem concerns the key, recipient, sender, quota or connection. An email reference is shown when the provider accepts the request.
 
-## Development
+To repair a key, open **Fix email delivery** on the local sign-in screen. Your authorized email and password are still required. A replacement key is saved only after Resend accepts the email; it cannot change the authorized inbox or bypass email verification. Upgrades retain an already configured key. Never commit `auth.json`, `.env` files, backups or SQLite data to GitHub.
 
-`python meridian.py --offline` to run without network; `python -m unittest discover -s tests` for backend tests. The local service defaults to loopback and may optionally be exposed via a carefully configured Tailscale Serve proxy.
+## Lightweight monitoring
 
+Settings offers three modes:
 
+| Mode | Endpoint probes | GitHub refresh |
+| --- | --- | --- |
+| Balanced | Every 5 minutes | Every 30 minutes |
+| Quiet | Every 15 minutes | Every hour |
+| Paused | Manual only | Manual only |
 
-## Private owner sign-in (v0.2.13)
+The UI stops polling while hidden and checks every thirty seconds when visible, briefly faster during a refresh. Unchanged state returns no dashboard payload and does not rebuild the page. The backend sleeps until the next scheduled job. GitHub uses conditional requests and respects API rate-limit resets. Certificate-expiry checks are reused for six hours. Release checks continue every six hours in every mode.
 
-Meridian now protects the entire dashboard and private API behind an authorized email and password followed by a one-time email magic link. On first local launch, register a free [Resend](https://resend.com/signup) account using the authorized inbox. Create a **Sending access** key in [Resend API Keys](https://resend.com/api-keys). Enter that key, your email, and chosen password in Meridian's local-only setup screen. The first magic link is sent immediately; if the provider rejects the key or recipient, setup rolls back without deleting project notes.
+Endpoint samples retain fourteen days; download snapshots retain ninety days; imported events are bounded. Personal notes and goals are not pruned. Settings shows local database size and service uptime. These policies limit background work and storage growth; total memory also includes the system WebView2 runtime.
 
-The authorized email, password and API key **must not** be committed to GitHub. They are never built into the public installers. The password is kept as a salted scrypt verifier, the Resend key is stored in the owner's local user-data directory, and magic-link/session tokens are short-lived. Links last 10 minutes and work once. Sign-in is limited to three emails per 24 hours, with a five-minute cooldown. An authenticated session lasts 12 hours. Use Tailscale rather than exposing the local service directly to the public Internet.
+## Useful, measured analytics
 
-For the Resend test sender `onboarding@resend.dev`, mail is limited to the address associated with the Resend account unless a sending domain is verified. Open emailed `localhost` links on the Windows PC running Meridian; to log in from another device, open Meridian through your trusted Tailscale hostname and request a link there.
+- Project and 7/30-day filters for observed download increases and imported visitor/pageview data.
+- Download growth compares the same release asset across snapshots; new baselines and counter resets are excluded. Missing samples stay unknown. Increases spanning a gap are identified as observations, not exact daily totals.
+- Recent default-branch build pass rates, with cancelled/skipped jobs excluded.
+- Last-24-hour successful probe counts, average/slowest successful response time, and latest certificate-expiry readings.
+- Goals marked completed during the selected period, latest releases, open priorities and an activity timeline.
+- A 48-hour availability strip with missing hours shown as unmeasured.
 
-If provider credentials change and you cannot log in, exit Meridian and remove only `%USERPROFILE%\\.meridian\\auth.json` from your local computer. Your SQLite project notes remain intact. The Windows installer upgrade retains local data.
+Downloads are requests, not installations or users. Probe reliability is sampled while the app runs, not a continuous uptime guarantee. Traffic requires a CSV import with `date,visitors,pageviews`; daily visitor counts cannot establish unique people across a longer period.
 
-## Windows first-run fix (v0.2.13)
+## Development and verification
 
-The installer stops an older background Meridian process before upgrading, then opens the new application automatically. Before configuration, the home screen presents a one-time setup form for the authorized email address, an access password, and a Resend Sending access key. Project notes and other local data survive upgrades. Existing authentication settings remain in place and will show the normal sign-in form rather than setup.
+Production Python uses the standard library. The frontend is plain JavaScript/CSS with no external scripts, fonts or chart runtime.
 
-If you already installed v0.2.8 but see the old dashboard, quit old Meridian processes and install v0.2.13. The launcher now refuses to silently open an outdated background version.
+```
+python meridian.py --offline
+python -m unittest discover -s tests -v
+node tests/metrics.test.cjs
+```
 
-## v0.2.13 desktop sign-in and icon refresh
+Browser tests use disposable data and mock email delivery. Install test-only Playwright with `npm install --no-save playwright@1.58.2`, run `npx playwright install chromium`, then `node tests/browser_smoke.cjs`.
 
-Magic links may still open in the default browser, but the email approval now unlocks the **original** desktop window automatically. After approval the browser displays a simple success page; you can close that tab. An independently generated 256-bit challenge stays in the original window, and the email never contains that challenge. Approval expires after 10 minutes and is single-use. The existing Resend API key and authorized email remain in the local user configuration; upgrades do not ask for the key again.
+The Windows workflow builds and installs the app on Windows, tests file-lock rollback, shortcut and native icon identity, upgrades while the real native window is open, verifies notes/key preservation, leaves unrelated Python processes running, reopens the app and checks duplicate launch behavior. Linux packages are built and checked separately. Live Resend delivery with the owner's locally stored key requires verification on the owner's computer.
 
-The unified Meridian icon is a thick lime asterisk on a dark rounded square, generated for both PNG and Windows ICO along with the SVG used throughout sign-in and dashboard screens.
-
-## Desktop magic links (v0.2.13)
-
-The Windows installer registers `meridian://` as an application link for the current Windows user. Sign-in email includes **Open Meridian desktop** and an ordinary HTTP browser fallback for mail clients that block custom links. The registered link confirms the email token directly with the local running application; the originally waiting Meridian window receives its own session and unlocks automatically. When a waiting desktop handoff exists, opening the browser fallback displays only an approval confirmation, not a second authenticated dashboard. Desktop sign-in requires Meridian to remain open while you click the link. Installing v0.2.13 updates the protocol registration; secrets remain in the local user profile only.
-
-## v0.2.13: reliable email-code login and Windows taskbar icon
-
-Email authentication now sends an 8-digit code that is entered in the waiting application window. This does not rely on link tracking redirects, browser extensions, or custom URL handlers. Codes expire in ten minutes, are single-use, and permit only five guesses per request; sending remains limited to three sign-in emails daily. Magic links remain as optional fallbacks, but the email's HTML contains no clickable links that a sending service can wrap with click tracking. Do not disclose your one-time code.
-
-On Windows Meridian now opens a **native WebView2 application window** with its own icon and app identity instead of using a Microsoft Edge `--app` window. Microsoft Edge WebView2 Runtime is required for the native window; if unavailable, Meridian offers a browser fallback. Older pinned Edge icons must be unpinned separately from the Windows taskbar, since they are not Meridian's shortcuts.
-
-## v0.2.13: fix email-code cooldown and desktop shortcut icon
-
-The login button now explicitly requests an 8-digit email verification code. Verified owner requests are limited to one per 60 seconds and six messages in 24 hours (wrong passwords are still rate-limited), making migration from older unusable link emails possible. If this instance already requested a code and the screen reloads, the waiting challenge is recoverable from same-window session storage until it expires. Errors indicate the remaining cooldown. Resend delivery still depends on the account and key configured on this computer; no email API secret is bundled in the public source.
-
-The Windows installer metadata and launcher version agree. The desktop shortcut explicitly targets the installed Meridian.exe and a versioned Meridian asterisk icon (`meridian-desktop-2026.ico`) rather than the previous cached logo. Windows may preserve separately pinned Edge shortcuts; unpin an old Edge shortcut if one remains.
+For remote use, place Meridian behind a properly configured private Tailscale connection. It binds to loopback by default; a trusted-host allowlist is not a substitute for authentication. Back up planning data from Settings.
