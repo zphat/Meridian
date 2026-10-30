@@ -38,6 +38,9 @@ background=background.resize((size,size),Image.Resampling.LANCZOS)
 background.save(assets/"meridian.png",optimize=True)
 background.save(assets/"meridian.ico",format="ICO",
                 sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
+# Versioned icon filename forces Windows to refresh legacy desktop shortcut cache.
+background.save(assets/"meridian-desktop-2026.ico",format="ICO",
+                sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
 
 svg='''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect x="0.6" y="0.6" width="62.8" height="62.8" rx="13.5" fill="#0c110e" stroke="#36582c" stroke-width="1.2"/>
