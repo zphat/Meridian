@@ -11,7 +11,7 @@ fs.mkdirSync(output,{recursive:true});
  let browser;
  try{
   const port=await new Promise((resolve,reject)=>{server.stdout.once('data',x=>resolve(String(x).trim()));server.once('exit',()=>reject(Error(errors)));setTimeout(()=>reject(Error('Fixture server startup timed out: '+errors)),15000).unref();});
-  browser=await chromium.launch({headless:true,channel:"chromium",args:['--no-sandbox']});
+  browser=await chromium.launch({headless:true,channel:"chromium",executablePath:process.env.MERIDIAN_CHROME_EXECUTABLE,args:['--no-sandbox']});
   const page=await browser.newPage({viewport:{width:1280,height:850}});
   const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
   await page.goto('http://127.0.0.1:'+port);

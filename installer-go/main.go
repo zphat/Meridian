@@ -287,7 +287,7 @@ func registerProtocol(dir string, remove bool) error {
 // Match full installation paths, not process names. v0.2.12 introduced a
 // long-lived Meridian.exe window; stopping only Python leaves its EXE locked.
 func stopPreviousMeridian(dir string) error {
-	script := `$ErrorActionPreference='Stop';
+	script := `$ErrorActionPreference='Stop'; try {
 $launcher=` + psQuote(filepath.Join(dir, "Meridian.exe")) + `;
 $app=` + psQuote(filepath.Join(dir, "meridian.py")) + `;
 $runtime=` + psQuote(filepath.Join(dir, "runtime")) + `;
@@ -310,7 +310,12 @@ foreach($p in $owned) {
     try {$process.Kill()} catch {if(-not $process.HasExited){throw}};
     if(-not $process.WaitForExit(5000)){throw 'Meridian did not release its installed files'}
   }
-}`
+}
+} catch { [Console]::Error.WriteLine($_.Exception.ToString()); exit 1 }
+# Get-Process -ErrorAction SilentlyContinue sets $? to false when normal
+# native-window cleanup has already stopped Python. That is successful cleanup,
+# not a setup failure. Terminating errors above still return a nonzero exit.
+exit 0`
 	if e := quiet("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script); e != nil {
 		return fmt.Errorf("could not stop a previous Meridian instance: %w", e)
 	}
