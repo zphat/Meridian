@@ -164,36 +164,15 @@ class AuthHttpTests(unittest.TestCase):
         self.assertEqual(status,502)
         self.assertFalse(self.app.auth.configured())
 
-if __name__=='__main__':unittest.main()
-)
-        status,_,_=self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':'a'*8})
-        self.assertEqual(status,400)
-        wrong='00000000' if code!='00000000' else '11111111'
-        status,_,_=self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':wrong})
-        self.assertEqual(status,401)
-        status,headers,result=self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':code})
-        self.assertEqual(status,200)
-        cookie=headers['Set-Cookie'].split(';')[0]
-        self.assertEqual(self.req('GET','/api/state',headers={'Cookie':cookie})[0],200)
-        self.assertEqual(self.req('GET','/api/state')[0],401)
-        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':code})[0],401)
-        self.assertEqual(self.req('GET','/auth/verify?token=no-longer-valid')[0],200)
-        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':'Z'*43,'code':code})[0],401)
-    def test_otp_attempts_lock_after_five_failures(self):
+    def test_code_attempt_limit_is_persistent(self):
         self.app.auth.configure('owner@example.com','test-password-123!','re_test_valid_token_12345')
-        captured=[];challenge='C'*43
-        with patch.object(AuthManager,'_send_resend',staticmethod(lambda cfg,url:captured.append(cfg['_one_time_code']))):
-            self.req('POST','/api/auth/request',{'email':'owner@example.com','password':'test-password-123!','challenge':challenge})
-        wrong='00000000' if captured[0]!='00000000' else '11111111'
-        for _ in range(5):
+        saved=[];challenge='Q'*43
+        with patch.object(AuthManager,'_send_resend',staticmethod(lambda cfg,url:saved.append(cfg['_one_time_code']))):
+            status,_,_=self.req('POST','/api/auth/request',{'email':'owner@example.com','password':'test-password-123!','challenge':challenge})
+        self.assertEqual(status,200)
+        wrong='00000000' if saved[0]!='00000000' else '11111111'
+        for attempt in range(5):
             self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':wrong})[0],401)
-        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':captured[0]})[0],429)
-
-    def test_setup_rollback_if_mail_fails(self):
-        def failing(c,u):raise AuthError('email unavailable',502)
-        with patch.object(AuthManager,'_send_resend',staticmethod(failing)):
-            status,_,_=self.req('POST','/api/auth/setup',{'email':'owner@example.com','password':'a long test secret','resend_key':'re_test_valid_token_12345'})
-        self.assertEqual(status,502)
-        self.assertFalse(self.app.auth.configured())
+        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':saved[0]})[0],429)
 
 if __name__=='__main__':unittest.main()
