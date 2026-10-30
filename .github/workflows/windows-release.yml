@@ -174,6 +174,47 @@ jobs:
               Write-Host 'Reinstall process cleanup and first-run setup verified'
             } finally {Stop-Process -Id $new.Id -ErrorAction SilentlyContinue}
           } finally {Stop-Process -Id $old.Id -ErrorAction SilentlyContinue}
+      - name: Verify clicking an emailed desktop link unlocks the installed app
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
+          $py=Join-Path $root 'runtime/python.exe'
+          $app=Join-Path $root 'meridian.py'
+          $launcher=Join-Path $root 'Meridian.exe'
+          $server=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','8765') -PassThru -WindowStyle Hidden
+          try {
+            $ready=$false
+            for($j=0;$j -lt 40;$j++) {
+              Start-Sleep -Milliseconds 500
+              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.11'){$ready=$true;break}} catch {}
+            }
+            if(-not $ready){throw 'Installed Meridian service did not start'}
+            # Generate a real one-time challenge/token in the installed database.
+            # All mail delivery is mocked locally; no Resend secrets or emails are involved.
+            $script=@'
+          from meridian import Meridian
+          app=Meridian(start_worker=False)
+          challenge='B'*43
+          app.auth.configure('desktop-ci@example.test','test-password-123!','re_ci_mock_key_123456789')
+          links=[]
+          app.auth.issue_link('desktop-ci@example.test','test-password-123!','http://127.0.0.1:8765',lambda cfg,link:links.append(link),challenge=challenge)
+          print('meridian://approve?token='+links[0].split('token=')[1])
+          app.close()
+          '@
+            $deep=(& $py -c $script | Out-String).Trim()
+            if(-not $deep.StartsWith('meridian://approve?token=')){throw "Could not generate desktop protocol token: $deep"}
+            $handler=Start-Process -FilePath $launcher -ArgumentList $deep -PassThru -Wait -WindowStyle Hidden
+            if($handler.ExitCode -ne 0){throw "Windows desktop magic-link handler returned $($handler.ExitCode)"}
+            $web=New-Object Microsoft.PowerShell.Commands.WebRequestSession
+            $body=@{challenge=('B'*43)} | ConvertTo-Json -Compress
+            $result=Invoke-RestMethod 'http://127.0.0.1:8765/api/auth/handoff' -Method Post -ContentType 'application/json' -Body $body -WebSession $web
+            if(-not $result.authenticated){throw 'Desktop sign-in challenge was not approved by the installed launcher'}
+            $auth=Invoke-RestMethod 'http://127.0.0.1:8765/api/auth/status' -WebSession $web
+            if(-not $auth.authenticated){throw 'Desktop window did not receive an authenticated session'}
+            Write-Host 'Custom email URL protocol and installed desktop sign-in handoff PASSED'
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
