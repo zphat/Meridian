@@ -30,30 +30,7 @@ func approveDesktopLink(raw string) error {
   return fmt.Errorf("invalid Meridian sign-in link")
  }
  token:=u.Query().Get("token")
- if !regexp.MustCompile(`^[a-zA-Z0-9_-]{40,60}package main
-
-import (
- "fmt"
- "net/http"
- "net/url"
- "regexp"
- "strings"
- "os"
- "os/exec"
- "path/filepath"
- "syscall"
- "time"
- "unsafe"
-)
-
-func message(s string) {
- user32:=syscall.NewLazyDLL("user32.dll")
- p:=user32.NewProc("MessageBoxW")
- t,_:=syscall.UTF16PtrFromString(s)
- title,_:=syscall.UTF16PtrFromString("Meridian")
- p.Call(0,uintptr(unsafe.Pointer(t)),uintptr(unsafe.Pointer(title)),0x10)
-}
-).MatchString(token){
+ if !regexp.MustCompile(`^[a-zA-Z0-9_-]{40,60}$`).MatchString(token){
   return fmt.Errorf("invalid or expired sign-in token")
  }
  client:=&http.Client{
