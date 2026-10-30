@@ -53,6 +53,7 @@ jobs:
         run: |
           $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
           Push-Location launcher-go
+          go mod tidy
           go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian.exe .
           Pop-Location
       - name: Build embedded app archive
