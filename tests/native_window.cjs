@@ -20,7 +20,7 @@ const executable=path.join(root,'Meridian.exe');
   let ready=false;
   for(let n=0;n<60;n++){
    if(child.exitCode!==null)throw Error('Native app exited with '+child.exitCode);
-   try{const r=await fetch('http://127.0.0.1:19222/json/version');if(r.ok){ready=true;break;}}catch{}
+   try{const r=await fetch('http://127.0.0.1:19222/json/version');if(r.ok){ready=true;break;}}catch(e){if(n===59)console.log('CDP connection error:',e.message,e.cause?.message);}
    await delay(500);
   }
   assert.ok(ready,'WebView2 never initialized its browser process');
@@ -55,6 +55,7 @@ const executable=path.join(root,'Meridian.exe');
   }
   throw e;
  }finally{
+  console.log(spawnSync('powershell.exe',['-NoProfile','-Command',"Get-CimInstance Win32_Process | Where-Object Name -match 'msedge|Meridian' | Select-Object Name,ProcessId,CommandLine | Format-List; Get-NetTCPConnection -State Listen | Where-Object LocalPort -ge 19000 | Select-Object LocalAddress,LocalPort,OwningProcess"],{encoding:'utf8'}).stdout);
   // /T closes the app-owned backend and WebView2 children as well.
   spawnSync('taskkill',['/PID',String(child.pid),'/T','/F']);
   if(browser)await browser.close().catch(()=>{});

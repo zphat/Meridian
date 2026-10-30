@@ -22,6 +22,13 @@ jobs:
       - run: npm install --no-save playwright@1.58.2
       - name: Inspect the published app's actual WebView2 page
         run: node tests/native_window.cjs
+      - name: Inspect browser process and test machine
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem Env: | Where-Object Name -match 'WEBVIEW|PROXY|NODE_OPTIONS'
+          Get-CimInstance Win32_Process | Where-Object Name -match 'msedge|Meridian' | Select-Object Name,ProcessId,CommandLine | Format-List
+          Get-NetTCPConnection -State Listen | Where-Object LocalPort -ge 19000 | Select-Object LocalAddress,LocalPort,OwningProcess
       - uses: actions/upload-artifact@v4
         if: always()
         with:
