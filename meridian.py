@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.8"
+VERSION = "0.2.9"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -503,7 +503,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.8"
+    server_version="Meridian/0.2.9"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -701,8 +701,15 @@ def serve(args):
                 with urllib.request.urlopen(f"http://127.0.0.1:{args.port}/api/health",timeout=2) as response:
                     status=json.load(response)
                 if status.get("app")=="Meridian":
+                    current=str(status.get("version") or "unknown")
+                    if current != VERSION:
+                        raise RuntimeError(
+                            f"An older Meridian instance (v{current}) is still running on port {args.port}. "
+                            f"Close the old application and open v{VERSION} again. "
+                            "The updated installer normally closes old instances automatically."
+                        ) from err
                     if not args.no_browser:launch_window(f"http://127.0.0.1:{args.port}/")
-                    print("Meridian is already running.",flush=True)
+                    print("Meridian is already running at the current version.",flush=True)
                     return
             except (OSError,ValueError,urllib.error.URLError): pass
         raise RuntimeError(f"Cannot start Meridian on port {args.port}: {err}. Use --port 0 for a free port.") from err
