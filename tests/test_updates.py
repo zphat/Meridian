@@ -133,10 +133,14 @@ class AccessControlTests(unittest.TestCase):
         import http.client
         host='meridian-pc.tailnet.ts.net'
         body=json.dumps({'project':'latitude','title':'Remote note','body':'Saved through Serve'})
+        self.app.auth.configure('owner@example.com','a long test password','re_fake_testing_key_000')
+        sent=[]
+        self.app.auth.issue_link('owner@example.com','a long test password','https://'+host,lambda c,u:sent.append(u))
+        session=self.app.auth.redeem(sent[0].split('token=')[1])
         with patch.object(meridian,'TRUSTED_HOSTS',{host}):
             conn=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=5)
             try:
-                conn.request('POST','/api/notes',body,headers={'Host':host,'Origin':'https://'+host,'Content-Type':'application/json','Sec-Fetch-Site':'same-origin'})
+                conn.request('POST','/api/notes',body,headers={'Host':host,'Origin':'https://'+host,'Content-Type':'application/json','Sec-Fetch-Site':'same-origin','Cookie':'meridian_session='+session})
                 response=conn.getresponse()
                 self.assertEqual(response.status,201,response.read().decode())
                 response.read()

@@ -24,10 +24,11 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from email.utils import parsedate_to_datetime
+from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.7"
+VERSION = "0.2.8"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -97,6 +98,7 @@ class Meridian:
         self._update_busy = False
         self.tray_icon = None  # Windows packaged build can issue a system notification.
         self._initialize()
+        self.auth = AuthManager(self.data_dir, self.conn, self.lock)
         if start_worker:
             self.worker = threading.Thread(target=self._loop, name="MeridianMonitor", daemon=True)
             self.worker.start()
@@ -498,9 +500,9 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2"
+    server_version="Meridian/0.2.8"
     def log_message(self,format,*args):
-        if not self.path.startswith('/api/state'):super().log_message(format,*args)
+        if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
     @property
     def app(self):return self.server.meridian
@@ -537,9 +539,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(415,"Application/json required");return False
         return True
 
+    def session_valid(self):
+        return self.app.auth.check_session(self.headers.get('Cookie',''))
+
+    def send_auth_html(self):
+        raw=(STATIC/'auth.html').read_bytes()
+        self.send_response(200)
+        self.send_header('Content-Type','text/html; charset=utf-8')
+        self.send_header('Content-Length',str(len(raw)))
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
+        self.send_header('Referrer-Policy','no-referrer')
+        self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.end_headers();self.wfile.write(raw)
+
     def reply(self,value,code=200):
         raw=json.dumps(value,ensure_ascii=False).encode("utf-8")
-        self.send_response(code);self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(raw)));self.send_header("X-Content-Type-Options","nosniff");self.end_headers();self.wfile.write(raw)
+        self.send_response(code);self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(raw)));self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer");self.end_headers();self.wfile.write(raw)
 
     def body(self):
         size=int(self.headers.get("Content-Length","0"))
@@ -551,15 +567,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.guard():return
         path=urllib.parse.urlsplit(self.path).path
+        if path=="/api/health":return self.reply({"ok":True,"app":"Meridian","version":VERSION,"local":True})
+        if path=="/api/auth/status":
+            return self.reply({"configured":self.app.auth.configured(),"authenticated":self.session_valid(),
+                "local_setup":self.headers.get("Host","").split(":")[0].lower() in ("127.0.0.1","localhost")})
+        if path=="/auth/verify":
+            token=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("token",[""])[0]
+            try:cookie=self.app.auth.redeem(token)
+            except AuthError:return self.send_auth_html()
+            remote=(urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname or '') not in ('127.0.0.1','localhost')
+            self.send_response(303);self.send_header('Location','/')
+            self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
+            self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.end_headers();return
+        if path in ('/auth.js','/auth.css','/favicon.svg'):return self.serve_static(path)
+        if not self.session_valid():
+            if path.startswith('/api/'):return self.reply({'error':'Sign-in required'},401)
+            return self.send_auth_html()
         if path=="/api/state":return self.reply(self.app.snapshot())
         if path=="/api/backup":return self.reply(self.app.backup())
-        if path=="/api/health":return self.reply({"ok":True,"app":"Meridian","version":VERSION,"local":True})
         if path=="/":path="/index.html"
+        return self.serve_static(path)
+
+    def serve_static(self,path):
         if not path.startswith("/"):return self.send_error(404)
         candidate=(STATIC/path.lstrip("/")).resolve()
         if not candidate.is_relative_to(STATIC.resolve()) or not candidate.is_file():return self.send_error(404)
         mime={".html":"text/html; charset=utf-8",".js":"application/javascript; charset=utf-8",".css":"text/css; charset=utf-8",".svg":"image/svg+xml",".png":"image/png"}.get(candidate.suffix,"application/octet-stream")
-        raw=candidate.read_bytes();self.send_response(200);self.send_header("Content-Type",mime);self.send_header("Content-Length",str(len(raw)));self.send_header("Cache-Control","no-cache");self.send_header("X-Content-Type-Options","nosniff");self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");self.end_headers();self.wfile.write(raw)
+        raw=candidate.read_bytes();self.send_response(200);self.send_header("Content-Type",mime);self.send_header("Content-Length",str(len(raw)));self.send_header("Cache-Control","no-store");self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer");self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");self.end_headers();self.wfile.write(raw)
 
     def do_POST(self):self.mutate("POST")
     def do_PATCH(self):self.mutate("PATCH")
@@ -569,6 +603,27 @@ class Handler(BaseHTTPRequestHandler):
         path=urllib.parse.urlsplit(self.path).path
         try:
             body=self.body() if method!="DELETE" else self.body()
+            if path=="/api/auth/setup" and method=="POST":
+                if self.headers.get('Host','').split(':')[0].lower() not in ('127.0.0.1','localhost'):
+                    return self.reply({'error':'Initial setup requires the local desktop'},403)
+                email=body.get('email'); password=body.get('password')
+                self.app.auth.configure(email,password,body.get('resend_key'))
+                host=self.headers.get('Host','')
+                try:self.app.auth.issue_link(email,password,'http://'+host)
+                except AuthError:
+                    self.app.auth.rollback_setup()
+                    raise
+                return self.reply({'ok':True,'link_sent':True},201)
+            if path=="/api/auth/request" and method=="POST":
+                host=self.headers.get('Host','')
+                remote=(urllib.parse.urlsplit('//'+host).hostname or '') not in ('127.0.0.1','localhost')
+                origin=('https://' if remote else 'http://')+host
+                return self.reply(self.app.auth.issue_link(body.get('email'),body.get('password'),origin))
+            if path=="/api/auth/logout" and method=="POST":
+                self.app.auth.logout(self.headers.get('Cookie',''))
+                self.send_response(204);self.send_header('Set-Cookie','meridian_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
+                self.send_header('Cache-Control','no-store');self.end_headers();return
+            if not self.session_valid():return self.reply({'error':'Sign-in required'},401)
             if path=="/api/refresh" and method=="POST":return self.reply({"started":self.app.refresh_async(body.get("kind","all"))})
             if path=="/api/updates/check" and method=="POST":return self.reply({"started":self.app.check_updates_async()})
             if path=="/api/analytics/import" and method=="POST":return self.reply({"imported":self.app.import_csv(body.get("csv",""),body.get("project",""))})
@@ -582,8 +637,9 @@ class Handler(BaseHTTPRequestHandler):
                 if method=="PATCH" and table=="goals":self.app.change_goal(id,body);return self.reply({"ok":True})
                 if method=="DELETE":self.app.delete(table,id);return self.reply({"ok":True})
             return self.reply({"error":"No matching endpoint"},404)
+        except AuthError as e:return self.reply({"error":str(e)},e.status)
         except (ValueError,KeyError,TypeError,sqlite3.Error) as e:return self.reply({"error":str(e)},400)
-        except Exception as e:return self.reply({"error":"Unexpected operation error: "+str(e)[:150]},500)
+        except Exception as e:return self.reply({"error":"Unexpected operation error"},500)
 
 def launch_window(url):
     """Prefer a dedicated app-like browser window; fall back to a normal tab."""

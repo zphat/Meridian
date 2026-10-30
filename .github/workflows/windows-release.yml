@@ -28,7 +28,7 @@ jobs:
       - name: Check source completeness
         shell: pwsh
         run: |
-          $needed=@("meridian.py","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go","assets/meridian.png","assets/meridian.ico")
+          $needed=@("meridian.py","auth.py","static/auth.html","static/auth.css","static/auth.js","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go","assets/meridian.png","assets/meridian.ico")
           foreach($p in $needed){ if(!(Test-Path $p)){throw "Missing $p — do not publish incomplete installer."} }
       - name: Test Python
         run: python -m unittest discover -s tests -v
@@ -36,6 +36,7 @@ jobs:
         shell: pwsh
         run: |
           node --check static/app.js
+          node --check static/auth.js
       - name: Build native Windows launcher
         shell: pwsh
         run: |
@@ -51,7 +52,7 @@ jobs:
           from pathlib import Path
           r=Path('.')
           with ZipFile('installer-go/payload.zip','w',ZIP_DEFLATED,compresslevel=9) as z:
-              for f in ['meridian.py','Meridian.exe'] + [p.as_posix() for folder in ('assets','static') for p in (r/folder).rglob('*') if p.is_file()]:
+              for f in ['meridian.py','auth.py','Meridian.exe'] + [p.as_posix() for folder in ('assets','static') for p in (r/folder).rglob('*') if p.is_file()]:
                   z.write(f,f)
           '@ | python -
       - name: Build installer executable
@@ -59,23 +60,23 @@ jobs:
         run: |
           $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
           Push-Location installer-go
-          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.7.exe .
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.8.exe .
           Pop-Location
       - name: Confirm installer PE format
         shell: pwsh
         run: |
-          $f=Get-Item Meridian-Setup-0.2.7.exe
+          $f=Get-Item Meridian-Setup-0.2.8.exe
           if($f.Length -lt 1000000){throw "Installer unexpectedly small"}
           $bytes=[IO.File]::ReadAllBytes($f.FullName)
           if($bytes[0] -ne 77 -or $bytes[1] -ne 90){throw "Not a Windows PE executable"}
       - name: Install and smoke test on Windows
         shell: pwsh
         run: |
-          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.7.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.8.exe'
           $install=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with code $($install.ExitCode)" }
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
-          foreach($f in @('Meridian.exe','meridian.py','runtime/python.exe','Uninstall-Meridian.exe','static/app.js','static/styles.css')) {
+          foreach($f in @('Meridian.exe','meridian.py','auth.py','runtime/python.exe','Uninstall-Meridian.exe','static/app.js','static/auth.html','static/auth.css','static/auth.js','static/styles.css')) {
             if (-not (Test-Path (Join-Path $root $f))) { throw "Missing installed file: $f" }
           }
           $py=Join-Path $root 'runtime/python.exe'
@@ -87,21 +88,26 @@ jobs:
               Start-Sleep -Seconds 1
               try {
                 $h=Invoke-RestMethod 'http://127.0.0.1:18765/api/health' -TimeoutSec 2
-                if ($h.ok -and $h.version -eq '0.2.7') {$healthy=$true;break}
+                if ($h.ok -and $h.version -eq '0.2.8') {$healthy=$true;break}
               } catch {}
             }
             if (-not $healthy) { throw 'Installed Meridian failed HTTP health check' }
-            $state=Invoke-RestMethod 'http://127.0.0.1:18765/api/state'
-            if (@($state.projects).Count -ne 3) { throw 'Expected 3 configured projects' }
-            $note=@{project='latitude';title='Windows CI smoke test';body='Verified installation'} | ConvertTo-Json
-            Invoke-RestMethod 'http://127.0.0.1:18765/api/notes' -Method Post -ContentType 'application/json' -Body $note | Out-Null
-            $state=Invoke-RestMethod 'http://127.0.0.1:18765/api/state'
-            if (-not ($state.notes | Where-Object title -eq 'Windows CI smoke test')) { throw 'Notes did not persist' }
+            $auth=Invoke-RestMethod 'http://127.0.0.1:18765/api/auth/status'
+            if ($auth.configured) {throw 'Fresh installation must request owner setup'}
+            $login=Invoke-WebRequest 'http://127.0.0.1:18765/' -UseBasicParsing
+            if ($login.Content -notmatch 'Sign in to Meridian'){throw 'Sign-in page missing'}
+            try {
+              Invoke-RestMethod 'http://127.0.0.1:18765/api/state' -ErrorAction Stop | Out-Null
+              throw 'Private dashboard accessible without a session'
+            } catch {
+              if ($_.Exception.Response.StatusCode -ne [System.Net.HttpStatusCode]::Unauthorized){throw}
+            }
+            Write-Host 'Private dashboard blocked before sign-in'
           } finally { Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue }
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
-          path: Meridian-Setup-0.2.7.exe
+          path: Meridian-Setup-0.2.8.exe
   release:
     needs: windows
     runs-on: ubuntu-latest
@@ -115,9 +121,9 @@ jobs:
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
-          tag="v0.2.7"
+          tag="v0.2.8"
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            gh release upload "$tag" Meridian-Setup-0.2.7.exe --repo "$repo" --clobber
+            gh release upload "$tag" Meridian-Setup-0.2.8.exe --repo "$repo" --clobber
           else
-            gh release create "$tag" Meridian-Setup-0.2.7.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
+            gh release create "$tag" Meridian-Setup-0.2.8.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
           fi
