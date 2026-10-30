@@ -21,7 +21,13 @@ jobs:
           if($p.ExitCode -ne 0){throw "Published setup failed: $($p.ExitCode)"}
       - run: npm install --no-save playwright@1.58.2
       - name: Inspect the published app's actual WebView2 page
-        run: node tests/native_window.cjs
+        shell: pwsh
+        run: |
+          $key='HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'Meridian.exe' -Value '--remote-debugging-port=19222 --remote-debugging-address=127.0.0.1' -PropertyType String -Force | Out-Null
+          $env:MERIDIAN_TEST_PUBLISHED='1'
+          try {node tests/native_window.cjs} finally {Remove-ItemProperty -Path $key -Name 'Meridian.exe' -ErrorAction SilentlyContinue}
       - name: Inspect browser process and test machine
         if: always()
         shell: pwsh

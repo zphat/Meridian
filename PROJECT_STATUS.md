@@ -1,8 +1,10 @@
-# Meridian — 0.2.14
+# Meridian — 0.2.15
 
-This release repairs native Windows upgrades and email-code sign-in recovery, then refines the always-open dashboard.
+This release addresses intermittent blank native startup with a painted loading page, interface readiness acknowledgement, one timed navigation retry and bounded browser recovery. It retains the 0.2.14 installer, sign-in and dashboard improvements.
 
 ## Behavior
+
+- The native window waits for a rendered interface, retries blank navigation after eight seconds and opens browser recovery after twenty-five seconds if necessary. Recovery stops on success or close; it adds no idle worker.
 
 - Setup stages application files, closes the installed native window/backend, and restores old files if replacement fails. It preserves user data and email configuration.
 - Shortcuts and the native window share the asterisk icon and taskbar identity. Duplicate launch focuses the open window.

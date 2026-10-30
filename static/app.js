@@ -229,6 +229,7 @@ async function load(silent=false){
   if(!modalSpec&&!document.querySelector('#prompt-backdrop')){
    const opened=[...document.querySelectorAll('#page details')].map(x=>x.open);
    render();document.querySelectorAll('#page details').forEach((x,i)=>x.open=!!opened[i]);
+   document.documentElement.dataset.meridianReady='dashboard';
   }
  }catch(e){
   if(!model)$('#page').innerHTML=`<div class="panel">Cannot reach Meridian: ${esc(e.message)}. <button class="soft-button" data-reconnect>Reconnect</button></div>`;

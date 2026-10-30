@@ -1,4 +1,4 @@
-# Meridian 0.2.14
+# Meridian 0.2.15
 
 A local development dashboard for Latitude, Longitude and Sundial. Your goals, notes, decisions and email credentials stay on your computer.
 
@@ -6,9 +6,15 @@ A local development dashboard for Latitude, Longitude and Sundial. Your goals, n
 
 Download the Windows installer or Linux package from [GitHub Releases](https://github.com/zphat/Meridian/releases/latest). Windows installs per user and downloads a pinned, SHA-256-verified Python runtime on the first installation. The Windows installer is not code signed.
 
-Version 0.2.14 fixes the `Meridian.exe: Access is denied` upgrade failure. Setup prepares the new files, closes only this installation's native window and backend, waits for them to exit, and replaces the application. If replacement fails, the previous application files are restored. Notes, authentication settings and the database are outside the installation directory and are preserved. Running setup again repairs a partially completed earlier installation.
+Version 0.2.14 fixed the `Meridian.exe: Access is denied` upgrade failure. Setup prepares the new files, closes only this installation's native window and backend, waits for them to exit, and replaces the application. If replacement fails, the previous application files are restored. Notes, authentication settings and the database are outside the installation directory and are preserved. Running setup again repairs a partially completed earlier installation.
 
 The native WebView2 window, Start Menu link and desktop shortcut share the lime asterisk icon and `Meridian.Desktop` identity. A second launch focuses the existing window. External HTTPS links open in your default browser. Windows may keep a separately pinned old Edge shortcut; remove that obsolete pin and pin the new Meridian window if needed.
+
+## Windows startup recovery
+
+Version 0.2.15 waits for the native renderer to paint a small loading page before navigating to the app. Startup succeeds only after the styled sign-in screen or dashboard acknowledges readiness. A missing page is retried after eight seconds; if WebView2 still cannot initialize or load the interface within twenty-five seconds, Meridian opens its healthy local service in the default browser. Closing the app cancels recovery. The guard stops after startup and adds no idle polling or processes.
+
+Startup timings and recovery stages are recorded in `%LOCALAPPDATA%\Meridian\logs\startup.log`; no passwords or email codes are logged. Existing notes and email settings are preserved.
 
 ## Private access
 
@@ -57,6 +63,6 @@ node tests/metrics.test.cjs
 
 Browser tests use disposable data and mock email delivery. Install test-only Playwright with `npm install --no-save playwright@1.58.2`, run `npx playwright install chromium`, then `node tests/browser_smoke.cjs`.
 
-The Windows workflow builds and installs the app on Windows, tests file-lock rollback, shortcut and native icon identity, upgrades while the real native window is open, verifies notes/key preservation, leaves unrelated Python processes running, reopens the app and checks duplicate launch behavior. Linux packages are built and checked separately. Live Resend delivery with the owner's locally stored key requires verification on the owner's computer.
+The Windows workflow attaches Playwright to the installed app’s actual WebView2, checks five consecutive native launches, and injects one blank document to verify automatic recovery and the subsequent sign-in/dashboard flow. It also builds and installs the app on Windows, tests file-lock rollback, shortcut and native icon identity, upgrades while the real native window is open, verifies notes/key preservation, leaves unrelated Python processes running, reopens the app and checks duplicate launch behavior. Linux packages are built and checked separately. Live Resend delivery with the owner's locally stored key requires verification on the owner's computer.
 
 For remote use, place Meridian behind a properly configured private Tailscale connection. It binds to loopback by default; a trusted-host allowlist is not a substitute for authentication. Back up planning data from Settings.
