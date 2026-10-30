@@ -17,10 +17,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+      - name: Generate Windows icon assets
+        run: |
+          python -m pip install "Pillow>=11,<13"
+          python tools/generate_icons.py
       - name: Check source completeness
         shell: pwsh
         run: |
-          $needed=@("meridian.py","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go")
+          $needed=@("meridian.py","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go","assets/meridian.png","assets/meridian.ico")
           foreach($p in $needed){ if(!(Test-Path $p)){throw "Missing $p — do not publish incomplete installer."} }
       - name: Test Python
         run: python -m unittest discover -s tests -v
