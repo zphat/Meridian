@@ -122,7 +122,7 @@ jobs:
           if(-not(Test-Path -LiteralPath $link)){throw "Installed desktop Meridian shortcut missing"}
           $shell=New-Object -ComObject WScript.Shell
           $shortcut=$shell.CreateShortcut($link)
-          if(-not($shortcut.TargetPath -like '*\\Programs\\Meridian\\Meridian.exe')){throw "Desktop shortcut still points to an old Meridian executable: $($shortcut.TargetPath)"}
+          if(-not($shortcut.TargetPath -like '*\Programs\Meridian\Meridian.exe')){throw "Desktop shortcut still points to an old Meridian executable: $($shortcut.TargetPath)"}
           if($shortcut.IconLocation -notmatch 'meridian-desktop-2026.ico'){throw "Shortcut still uses the old Windows icon: $($shortcut.IconLocation)"}
           $newIcon=Join-Path $root 'assets/meridian-desktop-2026.ico'
           if(-not(Test-Path $newIcon)){throw "Versioned Meridian desktop icon missing from installation"}
