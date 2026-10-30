@@ -24,7 +24,7 @@ var files embed.FS
 
 const (
  runtimeSHA256="4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
- appVersion="0.2.11"
+ appVersion="0.2.13"
  pyURL="https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
  title="Meridian Setup"
 )
@@ -113,7 +113,7 @@ func shortcuts(dir string,remove bool)error{
  desktop:=filepath.Join(profile,"Desktop","Meridian.lnk")
  var script string
  if remove {script="Remove-Item -LiteralPath "+psQuote(start)+" -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath "+psQuote(desktop)+" -Force -ErrorAction SilentlyContinue"} else {
-  exe:=filepath.Join(dir,"Meridian.exe");ico:=filepath.Join(dir,"assets","meridian.ico")
+  exe:=filepath.Join(dir,"Meridian.exe");ico:=filepath.Join(dir,"assets","meridian-desktop-2026.ico")
   script="$w=New-Object -ComObject WScript.Shell; $paths=@("+psQuote(start)+"); $desk=[Environment]::GetFolderPath('DesktopDirectory'); if($desk -and (Test-Path -LiteralPath $desk)){$paths+=Join-Path $desk 'Meridian.lnk'}; foreach($p in $paths){ $s=$w.CreateShortcut($p); $s.TargetPath="+psQuote(exe)+"; $s.WorkingDirectory="+psQuote(dir)+"; $s.IconLocation="+psQuote(ico)+"; $s.Description='Meridian Development Control Center'; $s.Save() }"
  }
  return quiet("powershell.exe","-NoProfile","-NonInteractive","-Command",script)
@@ -127,7 +127,7 @@ func registry(dir string,remove bool)error{
   {"Publisher","REG_SZ","Meridian"},
   {"InstallLocation","REG_SZ",dir},
   {"UninstallString","REG_SZ",`"`+filepath.Join(dir,"Uninstall-Meridian.exe")+`" --uninstall`},
-  {"DisplayIcon","REG_SZ",filepath.Join(dir,"assets","meridian.ico")},
+  {"DisplayIcon","REG_SZ",filepath.Join(dir,"assets","meridian-desktop-2026.ico")},
   {"NoModify","REG_DWORD","1"},
  }
  for _,kv:=range pairs {if err:=quiet("reg.exe","add",key,"/v",kv[0],"/t",kv[1],"/d",kv[2],"/f");err!=nil{return err}}
@@ -183,7 +183,7 @@ func install(silent bool)error{
  if err:=registry(dir,false);err!=nil{return err}
  if err:=registerProtocol(dir,false);err!=nil{return err}
  if !silent {
-  message("Meridian "+appVersion+" has been installed.\n\nThe application will open now. On first launch, enter your authorized email, new access password, and Resend API key.\n\nYour existing notes are preserved.",0x40)
+  message("Meridian "+appVersion+" is installed.\n\nThe application will open now. Enter your existing account password and request an eight-digit email code. First-time setup requires a Resend API key.\n\nYour notes and email settings have been preserved.",0x40)
   cmd:=exec.Command(filepath.Join(dir,"Meridian.exe"));cmd.Dir=dir;cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}
   if err:=cmd.Start();err!=nil{return fmt.Errorf("installed successfully, but couldn't open Meridian: %w",err)}
  }
