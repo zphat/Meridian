@@ -1,0 +1,29 @@
+name: Diagnose published native rendering
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  published-window:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install published 0.2.14 exactly as downloaded
+        shell: pwsh
+        run: |
+          Invoke-WebRequest 'https://github.com/zphat/Meridian/releases/download/v0.2.14/Meridian-Setup-0.2.14.exe' -OutFile previous.exe
+          $p=Start-Process ./previous.exe -ArgumentList '--silent' -Wait -PassThru
+          if($p.ExitCode -ne 0){throw "Published setup failed: $($p.ExitCode)"}
+      - run: npm install --no-save playwright@1.58.2
+      - name: Inspect the published app's actual WebView2 page
+        run: node tests/native_window.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Meridian-published-native-diagnostic
+          path: test-artifacts/native/
