@@ -28,7 +28,7 @@ var shortcutProperties string
 
 const (
 	runtimeSHA256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
-	appVersion    = "0.2.14"
+	appVersion    = "0.2.15"
 	pyURL         = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
 	title         = "Meridian Setup"
 )

@@ -99,4 +99,5 @@
   $('#code-back').addEventListener('click',()=>{showLogin();message.textContent=readPending()?'Your existing code still works. Return to it below without sending another email.':'';});
   document.addEventListener('visibilitychange',()=>{updateCooldown();if(document.hidden)stopPolling();else if(!codeForm.hidden)poll();});
   window.addEventListener('pagehide',()=>{stopPolling();clearTimeout(cooldownTimer);});
+  document.documentElement.dataset.meridianReady='auth';
 })();

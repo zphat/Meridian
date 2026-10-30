@@ -1,0 +1,42 @@
+name: Diagnose published native rendering
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  published-window:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install published 0.2.14 exactly as downloaded
+        shell: pwsh
+        run: |
+          Invoke-WebRequest 'https://github.com/zphat/Meridian/releases/download/v0.2.14/Meridian-Setup-0.2.14.exe' -OutFile previous.exe
+          $p=Start-Process ./previous.exe -ArgumentList '--silent' -Wait -PassThru
+          if($p.ExitCode -ne 0){throw "Published setup failed: $($p.ExitCode)"}
+      - run: npm install --no-save playwright@1.58.2
+      - name: Inspect the published app's actual WebView2 page
+        shell: pwsh
+        run: |
+          $key='HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'Meridian.exe' -Value '--remote-debugging-port=19222 --remote-debugging-address=127.0.0.1' -PropertyType String -Force | Out-Null
+          $env:MERIDIAN_TEST_PUBLISHED='1'
+          try {node tests/native_window.cjs} finally {Remove-ItemProperty -Path $key -Name 'Meridian.exe' -ErrorAction SilentlyContinue}
+      - name: Inspect browser process and test machine
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem Env: | Where-Object Name -match 'WEBVIEW|PROXY|NODE_OPTIONS'
+          Get-CimInstance Win32_Process | Where-Object Name -match 'msedge|Meridian' | Select-Object Name,ProcessId,CommandLine | Format-List
+          Get-NetTCPConnection -State Listen | Where-Object LocalPort -ge 19000 | Select-Object LocalAddress,LocalPort,OwningProcess
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Meridian-published-native-diagnostic
+          path: test-artifacts/native/
