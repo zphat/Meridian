@@ -16,7 +16,7 @@ Run `Meridian-Setup-0.2.7.exe` (compiled, x64). It installs to your user profile
 
 ## GitHub updates
 
-The updater checks `zphat/Meridian` on startup and periodically. This repository is currently **private**. GitHub's public release endpoint cannot expose private assets to an unauthenticated installed app; update checks are not fully operational until a dedicated authenticated or public release feed is provided. Do not store a GitHub token inside distributed installation assets. The update checker shows a private/unpublished notice rather than claiming up-to-date.
+The updater checks `zphat/Meridian` on startup and periodically. This repository is public. Meridian checks its public GitHub Releases feed at launch and periodically, shows a notification when a newer version is available, and lets you choose whether to install it. A published release containing the Windows installer is required before the channel can report an available update. No GitHub token is embedded in the installer.
 
 ## Local project data
 
@@ -26,4 +26,3 @@ Notes, goals, decisions, samples, downloads and snapshots are stored in the loca
 
 `python meridian.py --offline` to run without network; `python -m unittest discover -s tests` for backend tests. The local service defaults to loopback and may optionally be exposed via a carefully configured Tailscale Serve proxy.
 
-> Repository sync incomplete: frontend, packaging and test files are provided in the downloadable source archive but are not all committed. No build release is published yet.
