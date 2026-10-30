@@ -270,6 +270,50 @@ jobs:
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
+      - name: Verify installer upgrades while the actual Meridian GUI is running
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
+          $launcher=Join-Path $root 'Meridian.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.14.exe'
+          # This reproduces the actual user error: Windows locks Meridian.exe
+          # when the WebView2 application window is still open.
+          $gui=Start-Process -FilePath $launcher -PassThru
+          try {
+            $open=$false
+            for($i=0;$i -lt 50;$i++){
+              Start-Sleep -Milliseconds 350
+              $gui.Refresh()
+              if($gui.HasExited){throw 'Meridian GUI exited before upgrade test'}
+              if($gui.MainWindowHandle -ne [IntPtr]::Zero){$open=$true;break}
+            }
+            if(-not $open){throw 'Could not open Meridian GUI to reproduce locked executable'}
+            # Prove Meridian.exe itself is running before we start the installer.
+            $exePath=(Get-CimInstance Win32_Process -Filter "ProcessId=$($gui.Id)").ExecutablePath
+            if(-not([string]::Equals($exePath,$launcher,[StringComparison]::OrdinalIgnoreCase))){
+              throw "Unexpected GUI executable path: $exePath"
+            }
+            Write-Host 'Real Meridian.exe is running with its native window open'
+            $upgrade=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
+            if($upgrade.ExitCode -ne 0){throw "Installing over an OPEN Meridian window failed: exit $($upgrade.ExitCode)"}
+            $gui.Refresh()
+            if(-not $gui.HasExited){throw 'Installer did not close the running Meridian native window'}
+            if(-not(Test-Path $launcher)){throw 'Installer did not restore updated Meridian.exe'}
+            $new=(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Meridian').DisplayVersion
+            if($new -ne '0.2.14'){throw "Version metadata not upgraded: $new"}
+            $reopen=Start-Process -FilePath $launcher -PassThru
+            try {
+              $ready=$false
+              for($i=0;$i -lt 50;$i++){
+                Start-Sleep -Milliseconds 350
+                $reopen.Refresh()
+                if($reopen.HasExited){throw 'New Meridian GUI exited after upgrade'}
+                if($reopen.MainWindowHandle -ne [IntPtr]::Zero){$ready=$true;break}
+              }
+              if(-not $ready){throw 'Updated Meridian did not create a native window'}
+              Write-Host 'Upgrade with the real GUI open, process cleanup, replacement, and reopen ALL PASSED'
+            } finally {Stop-Process -Id $reopen.Id -Force -ErrorAction SilentlyContinue}
+          } finally {Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue}
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
