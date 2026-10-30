@@ -65,7 +65,8 @@ class AuthUnitTests(unittest.TestCase):
         self.assertEqual(len(payload),1)
         self.assertIn('meridian://approve?token=',payload[0]['text'])
         self.assertIn('http://127.0.0.1:8765/auth/verify?token=',payload[0]['text'])
-        self.assertIn('Open Meridian desktop',payload[0]['html'])
+        self.assertNotIn('<a href=',payload[0]['html'])
+        self.assertIn('No link needed',payload[0]['html'])
 
     def test_mail_throttle(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
@@ -138,11 +139,40 @@ class AuthHttpTests(unittest.TestCase):
         stored=[r[0] for r in self.app.conn.execute('SELECT challenge_hash FROM auth_handoff')]
         self.assertNotIn(challenge,stored)
 
+    def test_otp_confirm_then_replay_and_wrong_code(self):
+        self.app.auth.configure('owner@example.com','test-password-123!','re_test_valid_token_12345')
+        captured=[];challenge='Y'*43
+        with patch.object(AuthManager,'_send_resend',staticmethod(lambda cfg,url:captured.append(cfg['_one_time_code']))):
+            status,_,_=self.req('POST','/api/auth/request',{'email':'owner@example.com','password':'test-password-123!','challenge':challenge})
+        self.assertEqual(status,200)
+        code=captured[0]
+        self.assertEqual(len(code),8)
+        self.assertTrue(code.isdecimal())
+        wrong='00000000' if code!='00000000' else '11111111'
+        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':wrong})[0],401)
+        status,headers,_=self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':code})
+        self.assertEqual(status,200)
+        cookie=headers['Set-Cookie'].split(';')[0]
+        self.assertEqual(self.req('GET','/api/state',headers={'Cookie':cookie})[0],200)
+        self.assertEqual(self.req('GET','/api/state')[0],401)
+        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':code})[0],401)
+
     def test_setup_rollback_if_mail_fails(self):
         def failing(c,u):raise AuthError('email unavailable',502)
         with patch.object(AuthManager,'_send_resend',staticmethod(failing)):
             status,_,_=self.req('POST','/api/auth/setup',{'email':'owner@example.com','password':'a long test secret','resend_key':'re_test_valid_token_12345'})
         self.assertEqual(status,502)
         self.assertFalse(self.app.auth.configured())
+
+    def test_code_attempt_limit_is_persistent(self):
+        self.app.auth.configure('owner@example.com','test-password-123!','re_test_valid_token_12345')
+        saved=[];challenge='Q'*43
+        with patch.object(AuthManager,'_send_resend',staticmethod(lambda cfg,url:saved.append(cfg['_one_time_code']))):
+            status,_,_=self.req('POST','/api/auth/request',{'email':'owner@example.com','password':'test-password-123!','challenge':challenge})
+        self.assertEqual(status,200)
+        wrong='00000000' if saved[0]!='00000000' else '11111111'
+        for attempt in range(5):
+            self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':wrong})[0],401)
+        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':saved[0]})[0],429)
 
 if __name__=='__main__':unittest.main()

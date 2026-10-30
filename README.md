@@ -1,4 +1,4 @@
-# Meridian 0.2.11
+# Meridian 0.2.12
 
 Local-first personal control center for Latitude, Longitude, and Sundial.
 
@@ -12,7 +12,7 @@ Local-first personal control center for Latitude, Longitude, and Sundial.
 
 ## Windows
 
-Run `Meridian-Setup-0.2.11.exe` (compiled, x64). It installs to your user profile with Start Menu and desktop links, and fetches a pinned, verified Python embeddable runtime during first installation. Requires internet at first install. It is not code signed.
+Run `Meridian-Setup-0.2.12.exe` (compiled, x64). It installs to your user profile with Start Menu and desktop links, and fetches a pinned, verified Python embeddable runtime during first installation. Requires internet at first install. It is not code signed.
 
 ## GitHub updates
 
@@ -28,7 +28,7 @@ Notes, goals, decisions, samples, downloads and snapshots are stored in the loca
 
 
 
-## Private owner sign-in (v0.2.11)
+## Private owner sign-in (v0.2.12)
 
 Meridian now protects the entire dashboard and private API behind an authorized email and password followed by a one-time email magic link. On first local launch, register a free [Resend](https://resend.com/signup) account using the authorized inbox. Create a **Sending access** key in [Resend API Keys](https://resend.com/api-keys). Enter that key, your email, and chosen password in Meridian's local-only setup screen. The first magic link is sent immediately; if the provider rejects the key or recipient, setup rolls back without deleting project notes.
 
@@ -38,18 +38,24 @@ For the Resend test sender `onboarding@resend.dev`, mail is limited to the addre
 
 If provider credentials change and you cannot log in, exit Meridian and remove only `%USERPROFILE%\\.meridian\\auth.json` from your local computer. Your SQLite project notes remain intact. The Windows installer upgrade retains local data.
 
-## Windows first-run fix (v0.2.11)
+## Windows first-run fix (v0.2.12)
 
 The installer stops an older background Meridian process before upgrading, then opens the new application automatically. Before configuration, the home screen presents a one-time setup form for the authorized email address, an access password, and a Resend Sending access key. Project notes and other local data survive upgrades. Existing authentication settings remain in place and will show the normal sign-in form rather than setup.
 
-If you already installed v0.2.8 but see the old dashboard, quit old Meridian processes and install v0.2.11. The launcher now refuses to silently open an outdated background version.
+If you already installed v0.2.8 but see the old dashboard, quit old Meridian processes and install v0.2.12. The launcher now refuses to silently open an outdated background version.
 
-## v0.2.11 desktop sign-in and icon refresh
+## v0.2.12 desktop sign-in and icon refresh
 
 Magic links may still open in the default browser, but the email approval now unlocks the **original** desktop window automatically. After approval the browser displays a simple success page; you can close that tab. An independently generated 256-bit challenge stays in the original window, and the email never contains that challenge. Approval expires after 10 minutes and is single-use. The existing Resend API key and authorized email remain in the local user configuration; upgrades do not ask for the key again.
 
 The unified Meridian icon is a thick lime asterisk on a dark rounded square, generated for both PNG and Windows ICO along with the SVG used throughout sign-in and dashboard screens.
 
-## Desktop magic links (v0.2.11)
+## Desktop magic links (v0.2.12)
 
-The Windows installer registers `meridian://` as an application link for the current Windows user. Sign-in email includes **Open Meridian desktop** and an ordinary HTTP browser fallback for mail clients that block custom links. The registered link confirms the email token directly with the local running application; the originally waiting Meridian window receives its own session and unlocks automatically. When a waiting desktop handoff exists, opening the browser fallback displays only an approval confirmation, not a second authenticated dashboard. Desktop sign-in requires Meridian to remain open while you click the link. Installing v0.2.11 updates the protocol registration; secrets remain in the local user profile only.
+The Windows installer registers `meridian://` as an application link for the current Windows user. Sign-in email includes **Open Meridian desktop** and an ordinary HTTP browser fallback for mail clients that block custom links. The registered link confirms the email token directly with the local running application; the originally waiting Meridian window receives its own session and unlocks automatically. When a waiting desktop handoff exists, opening the browser fallback displays only an approval confirmation, not a second authenticated dashboard. Desktop sign-in requires Meridian to remain open while you click the link. Installing v0.2.12 updates the protocol registration; secrets remain in the local user profile only.
+
+## v0.2.12: reliable email-code login and Windows taskbar icon
+
+Email authentication now sends an 8-digit code that is entered in the waiting application window. This does not rely on link tracking redirects, browser extensions, or custom URL handlers. Codes expire in ten minutes, are single-use, and permit only five guesses per request; sending remains limited to three sign-in emails daily. Magic links remain as optional fallbacks, but the email's HTML contains no clickable links that a sending service can wrap with click tracking. Do not disclose your one-time code.
+
+On Windows Meridian now opens a **native WebView2 application window** with its own icon and app identity instead of using a Microsoft Edge `--app` window. Microsoft Edge WebView2 Runtime is required for the native window; if unavailable, Meridian offers a browser fallback. Older pinned Edge icons must be unpinned separately from the Windows taskbar, since they are not Meridian's shortcuts.

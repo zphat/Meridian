@@ -34,12 +34,12 @@ jobs:
         run: bash tools/build_linux_packages.sh
       - name: Validate built packages
         run: |
-          dpkg-deb -I dist-linux/Meridian-0.2.11-all.deb
-          dpkg-deb -c dist-linux/Meridian-0.2.11-all.deb | grep '/usr/bin/meridian'
-          rpm -qpl dist-linux/Meridian-0.2.11-1.noarch.rpm | grep '/usr/bin/meridian'
+          dpkg-deb -I dist-linux/Meridian-0.2.12-all.deb
+          dpkg-deb -c dist-linux/Meridian-0.2.12-all.deb | grep '/usr/bin/meridian'
+          rpm -qpl dist-linux/Meridian-0.2.12-1.noarch.rpm | grep '/usr/bin/meridian'
       - name: Install Debian package and smoke-test its local API
         run: |
-          sudo dpkg -i dist-linux/Meridian-0.2.11-all.deb
+          sudo dpkg -i dist-linux/Meridian-0.2.12-all.deb
           test -f /usr/share/applications/meridian.desktop
           /usr/bin/meridian --offline --no-browser --no-tray --port 18766 > /tmp/meridian-linux.log 2>&1 &
           pid=$!
@@ -48,17 +48,17 @@ jobs:
             if curl --fail --silent http://127.0.0.1:18766/api/health >/tmp/health.json; then break; fi
             sleep 1
           done
-          python3 -c 'import json; d=json.load(open("/tmp/health.json")); assert d.get("ok") is True and d.get("version")=="0.2.11", d'
+          python3 -c 'import json; d=json.load(open("/tmp/health.json")); assert d.get("ok") is True and d.get("version")=="0.2.12", d'
           curl --fail --silent http://127.0.0.1:18766/api/auth/status > /tmp/auth.json
           python3 -c 'import json; a=json.load(open("/tmp/auth.json")); assert a["configured"] is False and a["authenticated"] is False'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18766/api/state)" = 401
       - name: Upload verified Linux installers
         uses: actions/upload-artifact@v4
         with:
-          name: Meridian-Linux-v0.2.11
+          name: Meridian-Linux-v0.2.12
           path: |
-            dist-linux/Meridian-0.2.11-all.deb
-            dist-linux/Meridian-0.2.11-1.noarch.rpm
+            dist-linux/Meridian-0.2.12-all.deb
+            dist-linux/Meridian-0.2.12-1.noarch.rpm
           if-no-files-found: error
 
   publish:
@@ -67,7 +67,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Meridian-Linux-v0.2.11
+          name: Meridian-Linux-v0.2.12
       - name: Add Linux packages to public release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,8 +75,8 @@ jobs:
           set -euo pipefail
           repo="${{ github.repository }}"
           for n in $(seq 1 40); do
-            gh release view v0.2.11 --repo "$repo" >/dev/null 2>&1 && break
+            gh release view v0.2.12 --repo "$repo" >/dev/null 2>&1 && break
             sleep 15
           done
-          gh release view v0.2.11 --repo "$repo"
-          gh release upload v0.2.11 Meridian-0.2.11-all.deb Meridian-0.2.11-1.noarch.rpm --repo "$repo" --clobber
+          gh release view v0.2.12 --repo "$repo"
+          gh release upload v0.2.12 Meridian-0.2.12-all.deb Meridian-0.2.12-1.noarch.rpm --repo "$repo" --clobber

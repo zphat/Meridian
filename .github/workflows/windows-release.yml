@@ -2,6 +2,8 @@ name: Build, test and publish Meridian for Windows
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: meridian-windows-release
@@ -51,8 +53,9 @@ jobs:
       - name: Build native Windows launcher
         shell: pwsh
         run: |
-          $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
+          $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="on"
           Push-Location launcher-go
+          go mod tidy
           go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian.exe .
           Pop-Location
       - name: Build embedded app archive
@@ -71,12 +74,12 @@ jobs:
         run: |
           $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
           Push-Location installer-go
-          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.11.exe .
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.12.exe .
           Pop-Location
       - name: Confirm installer PE format
         shell: pwsh
         run: |
-          $f=Get-Item Meridian-Setup-0.2.11.exe
+          $f=Get-Item Meridian-Setup-0.2.12.exe
           if($f.Length -lt 1000000){throw "Installer unexpectedly small"}
           $bytes=[IO.File]::ReadAllBytes($f.FullName)
           if($bytes[0] -ne 77 -or $bytes[1] -ne 90){throw "Not a Windows PE executable"}
@@ -86,7 +89,7 @@ jobs:
           python -m pip install pefile
           @'
           import pefile
-          for path in ('Meridian.exe','Meridian-Setup-0.2.11.exe'):
+          for path in ('Meridian.exe','Meridian-Setup-0.2.12.exe'):
               exe=pefile.PE(path)
               entries=getattr(exe,'DIRECTORY_ENTRY_RESOURCE',None)
               if entries is None or not any(e.id==14 for e in entries.entries):
@@ -96,7 +99,7 @@ jobs:
       - name: Install and smoke test on Windows
         shell: pwsh
         run: |
-          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.11.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.12.exe'
           $install=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with code $($install.ExitCode)" }
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
@@ -121,7 +124,7 @@ jobs:
               Start-Sleep -Seconds 1
               try {
                 $h=Invoke-RestMethod 'http://127.0.0.1:18765/api/health' -TimeoutSec 2
-                if ($h.ok -and $h.version -eq '0.2.11') {$healthy=$true;break}
+                if ($h.ok -and $h.version -eq '0.2.12') {$healthy=$true;break}
               } catch {}
             }
             if (-not $healthy) {
@@ -149,13 +152,13 @@ jobs:
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
           $py=Join-Path $root 'runtime/python.exe'
           $app=Join-Path $root 'meridian.py'
-          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.11.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.12.exe'
           $old=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','8765') -PassThru -WindowStyle Hidden
           try {
             $started=$false
             for($j=0;$j -lt 40;$j++) {
               Start-Sleep -Milliseconds 500
-              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.11') {$started=$true;break}} catch {}
+              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.12') {$started=$true;break}} catch {}
             }
             if(-not $started){throw 'Pre-upgrade Meridian did not start'}
             $upgrade=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
@@ -167,7 +170,7 @@ jobs:
               $ready=$false
               for($j=0;$j -lt 40;$j++) {
                 Start-Sleep -Milliseconds 500
-                try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.11') {$ready=$true;break}} catch {}
+                try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.12') {$ready=$true;break}} catch {}
               }
               if(-not $ready){throw 'New Meridian did not restart'}
               $state=Invoke-RestMethod 'http://127.0.0.1:8765/api/auth/status'
@@ -189,7 +192,7 @@ jobs:
             $ready=$false
             for($j=0;$j -lt 40;$j++) {
               Start-Sleep -Milliseconds 500
-              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.11'){$ready=$true;break}} catch {}
+              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.12'){$ready=$true;break}} catch {}
             }
             if(-not $ready){throw 'Installed Meridian service did not start'}
             # Generate a real one-time challenge/token in the installed database.
@@ -220,11 +223,44 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
           }
+      - name: Verify native Meridian window owns its taskbar icon
+        shell: pwsh
+        run: |
+          $launcher=Join-Path $env:LOCALAPPDATA 'Programs/Meridian/Meridian.exe'
+          $p=Start-Process -FilePath $launcher -PassThru
+          try {
+            $handle=[IntPtr]::Zero
+            for($n=0;$n -lt 50;$n++){
+              Start-Sleep -Milliseconds 400
+              $p.Refresh()
+              if($p.HasExited){throw "Native Meridian window exited unexpectedly"}
+              $handle=$p.MainWindowHandle
+              if($handle -ne [IntPtr]::Zero){break}
+            }
+            if($handle -eq [IntPtr]::Zero){throw "Meridian did not create its own native taskbar window"}
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class MeridianWindowTest {
+            [DllImport("user32.dll",EntryPoint="SendMessageW")]
+            public static extern IntPtr SendMessage(IntPtr hWnd, UInt32 msg, IntPtr wParam, IntPtr lParam);
+            [DllImport("user32.dll",EntryPoint="GetClassLongPtrW")]
+            public static extern IntPtr GetClassLongPtr(IntPtr hWnd,int index);
+          }
+          '@
+            $icon=[MeridianWindowTest]::SendMessage($handle,0x7F,[IntPtr]1,[IntPtr]::Zero)
+            if($icon -eq [IntPtr]::Zero){$icon=[MeridianWindowTest]::GetClassLongPtr($handle,-14)}
+            if($icon -eq [IntPtr]::Zero){throw "Native Meridian window has no Windows icon assigned"}
+            Write-Host "Native Meridian window and taskbar icon verified"
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
-          path: Meridian-Setup-0.2.11.exe
+          path: Meridian-Setup-0.2.12.exe
   release:
+    if: github.event_name != 'pull_request'
     needs: windows
     runs-on: ubuntu-latest
     steps:
@@ -237,9 +273,9 @@ jobs:
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
-          tag="v0.2.11"
+          tag="v0.2.12"
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            gh release upload "$tag" Meridian-Setup-0.2.11.exe --repo "$repo" --clobber
+            gh release upload "$tag" Meridian-Setup-0.2.12.exe --repo "$repo" --clobber
           else
-            gh release create "$tag" Meridian-Setup-0.2.11.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
+            gh release create "$tag" Meridian-Setup-0.2.12.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
           fi
