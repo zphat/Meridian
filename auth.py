@@ -26,7 +26,7 @@ class AuthManager:
             if not all(isinstance(x,str) for x in (email,password,resend_api_key)):raise AuthError('All setup fields are required')
             email=email.strip().lower();resend_api_key=resend_api_key.strip()
             if not email or len(email)>254 or email.count('@')!=1:raise AuthError('Enter a valid authorized email')
-            if not 8<=len(password)<=200:raise AuthError('Password must be at least 8 characters')
+            if not 7<=len(password)<=200:raise AuthError('Password must be at least 7 characters')
             if not resend_api_key.startswith('re_') or len(resend_api_key)<12:raise AuthError('Enter a valid Resend API key')
             salt=secrets.token_bytes(16)
             digest=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32)
