@@ -89,7 +89,7 @@ class AuthManager:
         data=json.dumps({'from':cfg['from'],'to':[cfg['email']],'subject':'Your Meridian sign-in link',
            'text':'Open this private link on the device running Meridian, or another device connected to Tailscale. It expires in 10 minutes and works once.\n\n'+url+'\n\nIf you did not request this, ignore it.'}).encode()
         req=urllib.request.Request('https://api.resend.com/emails',data=data,headers={
-            'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json','User-Agent':'Meridian/0.2.8'},method='POST')
+            'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json','User-Agent':'Meridian/0.2.9'},method='POST')
         try:
             with urllib.request.urlopen(req,timeout=12) as response:
                 if response.status not in (200,201,202):raise AuthError('Email service unavailable',502)
