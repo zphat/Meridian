@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.10"
+VERSION = "0.2.11"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -503,7 +503,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.10"
+    server_version="Meridian/0.2.11"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -580,10 +580,13 @@ class Handler(BaseHTTPRequestHandler):
             except AuthError:return self.send_auth_html()
             remote=(urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname or '') not in ('127.0.0.1','localhost')
             self.send_response(303);self.send_header('Location','/auth/complete')
-            self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
+            if cookie:
+                self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
             self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.end_headers();return
         if path in ('/auth.js','/auth.css','/favicon.svg'):return self.serve_static(path)
-        if path=='/auth/complete' and self.session_valid():return self.serve_static('/auth-complete.html')
+        # Approval is not browser access: for desktop handoff the email-opening
+        # browser has no session, but must still see the confirmation page.
+        if path=='/auth/complete':return self.serve_static('/auth-complete.html')
         if not self.session_valid():
             if path.startswith('/api/'):return self.reply({'error':'Sign-in required'},401)
             return self.send_auth_html()

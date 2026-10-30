@@ -41,12 +41,12 @@
       const obj=await response.json();
       if(!response.ok)throw new Error(obj.error||'Unable to complete request');
       if(mode==='setup'){
-        mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first one-time sign-in link has been sent. Open it on this computer or through Tailscale.';
+        mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first one-time sign-in link has been sent. Choose “Open Meridian desktop” in the email, or use the browser confirmation fallback.';
         provider.hidden=true;form.elements.resend_key.required=false;submit.textContent='Send another link';form.elements.resend_key.value='';
         message.className='good';message.textContent='Sign-in link sent. You may request another after the five-minute cooldown if needed.';
       }else{message.className='good';message.textContent='Check your authorized inbox. The link expires in 10 minutes.';}
       waitForEmailConfirmation(challenge);
-      message.textContent+=' This Meridian window will unlock automatically when you approve the email link.';
+      message.textContent+=' This Meridian window unlocks automatically after approval. The browser confirmation is not a second copy of the app.';
       form.elements.password.value='';
     }catch(e){message.textContent=e.message||'Unexpected error';}
     finally{submit.disabled=false;}

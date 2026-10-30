@@ -47,6 +47,26 @@ class AuthUnitTests(unittest.TestCase):
             self.app.auth.issue_link('owner@example.com','a long test secret','http://127.0.0.1:8765',lambda c,u:None)
         self.assertEqual(locked.exception.status,429)
         self.assertEqual(self.app.conn.execute("SELECT COUNT(*) FROM auth_attempts WHERE category='attempt'").fetchone()[0],12)
+    def test_email_contains_desktop_and_explicit_browser_fallback(self):
+        import urllib.request
+        payload=[]
+        class FakeHTTP:
+            status=200
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+        def fake_send(request,timeout=None):
+            payload.append(json.loads(request.data))
+            return FakeHTTP()
+        with patch.object(urllib.request,'urlopen',side_effect=fake_send):
+            AuthManager._send_resend(
+                {'from':'Meridian <onboarding@resend.dev>','email':'owner@example.com','resend_key':'re_test_valid_token_12345'},
+                'http://127.0.0.1:8765/auth/verify?token='+('A'*43)
+            )
+        self.assertEqual(len(payload),1)
+        self.assertIn('meridian://approve?token=',payload[0]['text'])
+        self.assertIn('http://127.0.0.1:8765/auth/verify?token=',payload[0]['text'])
+        self.assertIn('Open Meridian desktop',payload[0]['html'])
+
     def test_mail_throttle(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
         sent=[]
@@ -103,8 +123,10 @@ class AuthHttpTests(unittest.TestCase):
         status,headers,_=self.req('GET','/auth/verify?token='+token)
         self.assertEqual(status,303)
         self.assertEqual(headers['Location'],'/auth/complete')
-        browser_cookie=headers['Set-Cookie'].split(';')[0]
-        self.assertIn(b'Email link confirmed',self.req('GET','/auth/complete',headers={'Cookie':browser_cookie})[2])
+        # The email-opening browser must not be issued an authenticated session.
+        self.assertNotIn('Set-Cookie',headers)
+        self.assertEqual(self.req('GET','/api/state')[0],401)
+        self.assertIn(b'Email link confirmed',self.req('GET','/auth/complete')[2])
         status,headers,payload=self.req('POST','/api/auth/handoff',{'challenge':challenge})
         self.assertEqual(status,200)
         self.assertTrue(json.loads(payload)['authenticated'])
