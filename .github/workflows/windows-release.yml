@@ -104,9 +104,12 @@ jobs:
             if (-not (Test-Path (Join-Path $root $f))) { throw "Missing installed file: $f" }
           }
           # A magic link must open the installed app, not another browser tab.
-          $protocolKey='Registry::HKEY_CURRENT_USER\\Software\\Classes\\meridian'
-          if(-not (Test-Path (Join-Path $protocolKey 'shell\\open\\command'))){throw 'Meridian desktop link protocol missing'}
-          $registration=(Get-Item (Join-Path $protocolKey 'shell\\open\\command')).GetValue('')
+          # Inspect and validate the exact per-user app link association.
+          reg query "HKCU\Software\Classes\meridian" /s
+          if($LASTEXITCODE -ne 0){throw 'Meridian protocol registration missing'}
+          $protocolKey='HKCU:\Software\Classes\meridian'
+          if(-not (Test-Path (Join-Path $protocolKey 'shell\open\command'))){throw 'Meridian desktop link protocol command missing'}
+          $registration=(Get-Item (Join-Path $protocolKey 'shell\open\command')).GetValue('')
           if($registration -notmatch 'Meridian.exe' -or $registration -notmatch '%1'){throw 'Meridian desktop protocol is not associated with the installed launcher'}
           Write-Host 'Meridian desktop email-link association verified'
           $py=Join-Path $root 'runtime/python.exe'
