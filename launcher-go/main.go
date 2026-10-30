@@ -51,7 +51,7 @@ func approveDesktopLink(raw string) error {
 }
 
 
-const currentVersion = "0.2.12"
+const currentVersion = "0.2.13"
 const localURL = "http://127.0.0.1:8765/"
 
 func healthy() (string,bool) {
@@ -112,7 +112,7 @@ func presentNativeWindow(root string) {
   return
  }
  defer w.Destroy()
- if err:=applyNativeIcon(w,filepath.Join(root,"assets","meridian.ico"));err!=nil {
+ if err:=applyNativeIcon(w,filepath.Join(root,"assets","meridian-desktop-2026.ico"));err!=nil {
   message("Meridian's native window could not set its application icon: "+err.Error())
  }
  w.Navigate(localURL)
