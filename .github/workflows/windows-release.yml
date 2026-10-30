@@ -204,7 +204,8 @@ jobs:
           print('meridian://approve?token='+links[0].split('token=')[1])
           app.close()
           '@
-            $deep=(& $py -c $script | Out-String).Trim()
+            Push-Location $root
+            try { $deep=(& python -c $script | Out-String).Trim() } finally { Pop-Location }
             if(-not $deep.StartsWith('meridian://approve?token=')){throw "Could not generate desktop protocol token: $deep"}
             $handler=Start-Process -FilePath $launcher -ArgumentList $deep -PassThru -WindowStyle Hidden
             if(-not $handler.WaitForExit(15000)){Stop-Process -Id $handler.Id -Force -ErrorAction SilentlyContinue; throw 'Desktop magic-link handler hung'}
