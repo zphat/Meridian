@@ -4,9 +4,9 @@
   let mode='login', polling=null;
   function createChallenge(){
     const random=new Uint8Array(32);crypto.getRandomValues(random);
-    return btoa(String.fromCharCode(...random)).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+    return btoa(String.fromCharCode(...random)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
   }
-  function waitForEmailConfirmation(challenge){
+  function waitForEmailConfirmation(challenge){itForEmailConfirmation(challenge){
     if(polling)clearInterval(polling);
     const until=Date.now()+10*60*1000;
     let busy=false;
