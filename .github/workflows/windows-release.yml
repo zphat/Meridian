@@ -38,6 +38,16 @@ jobs:
           node --check static/app.js
           node --check static/auth.js
           node --check static/app.js
+      - name: Embed Meridian asterisk in both Windows executable icons
+        shell: pwsh
+        run: |
+          go install github.com/akavel/rsrc@v0.10.2
+          $rsrc=Join-Path (go env GOPATH) 'bin/rsrc.exe'
+          if(-not (Test-Path $rsrc)){throw "Windows icon resource compiler missing"}
+          & $rsrc -arch amd64 -ico assets/meridian.ico -o launcher-go/rsrc_windows_amd64.syso
+          if($LASTEXITCODE -ne 0){throw "Could not embed launcher icon"}
+          & $rsrc -arch amd64 -ico assets/meridian.ico -o installer-go/rsrc_windows_amd64.syso
+          if($LASTEXITCODE -ne 0){throw "Could not embed installer icon"}
       - name: Build native Windows launcher
         shell: pwsh
         run: |
@@ -70,6 +80,19 @@ jobs:
           if($f.Length -lt 1000000){throw "Installer unexpectedly small"}
           $bytes=[IO.File]::ReadAllBytes($f.FullName)
           if($bytes[0] -ne 77 -or $bytes[1] -ne 90){throw "Not a Windows PE executable"}
+      - name: Confirm both Windows EXE files contain Meridian's icon
+        shell: pwsh
+        run: |
+          python -m pip install pefile
+          @'
+          import pefile
+          for path in ('Meridian.exe','Meridian-Setup-0.2.10.exe'):
+              exe=pefile.PE(path)
+              entries=getattr(exe,'DIRECTORY_ENTRY_RESOURCE',None)
+              if entries is None or not any(e.id==14 for e in entries.entries):
+                  raise SystemExit(path+' does not contain a Windows application icon')
+              print(path,'contains Windows application icon')
+          '@ | python -
       - name: Install and smoke test on Windows
         shell: pwsh
         run: |
