@@ -51,7 +51,7 @@ func approveDesktopLink(raw string) error {
 }
 
 
-const currentVersion = "0.2.13"
+const currentVersion = "0.2.14"
 const localURL = "http://127.0.0.1:8765/"
 
 func healthy() (string,bool) {

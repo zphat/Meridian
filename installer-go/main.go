@@ -5,6 +5,7 @@ import (
  "bytes"
  "crypto/sha256"
  "embed"
+ "errors"
  "fmt"
  "io"
  "net"
@@ -24,7 +25,7 @@ var files embed.FS
 
 const (
  runtimeSHA256="4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
- appVersion="0.2.13"
+ appVersion="0.2.14"
  pyURL="https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
  title="Meridian Setup"
 )
@@ -53,11 +54,25 @@ func installPayload(dir string) error {
   dst,err:=os.OpenFile(temp,os.O_WRONLY|os.O_CREATE|os.O_TRUNC,0644);if err!=nil{src.Close();return err}
   _,copyErr:=io.Copy(dst,src);c1:=dst.Close();c2:=src.Close()
   if copyErr!=nil{return copyErr};if c1!=nil{return c1};if c2!=nil{return c2}
-  if err:=os.Remove(target);err!=nil && !os.IsNotExist(err){return err}
+  if err:=removeInstalledFile(target);err!=nil{return err}
   if err:=os.Rename(temp,target);err!=nil{return err}
  }
  return nil
 }
+// A process can exit while Windows is still releasing executable and DLL
+// handles. Retry only sharing/permission locks for a bounded period.
+func removeInstalledFile(target string) error {
+ deadline:=time.Now().Add(6*time.Second)
+ for {
+  err:=os.Remove(target)
+  if err==nil||os.IsNotExist(err){return nil}
+  if !(errors.Is(err,os.ErrPermission)||errors.Is(err,syscall.Errno(32))) || time.Now().After(deadline){
+   return fmt.Errorf("could not replace %s: %w. Close other Meridian windows and retry the installer",target,err)
+  }
+  time.Sleep(200*time.Millisecond)
+ }
+}
+
 func downloadRuntime(target string) error {
  sentinel:=filepath.Join(target,".meridian-python-ready")
  if _,e:=os.Stat(sentinel);e==nil{return nil}
@@ -149,14 +164,56 @@ func registerProtocol(dir string, remove bool) error {
 
 // Stop only this installation's Python process, never unrelated Python applications.
 // Otherwise an older process can keep the local port and display the old UI.
+// Close the actual native Windows frontend as well as Meridian's private
+// backend before replacing Meridian.exe. The previous installer stopped only
+// Python, leaving the WebView2 host executable locked on disk.
 func stopPreviousMeridian(dir string) error {
  app := filepath.Join(dir,"meridian.py")
- script := `$target=` + psQuote(app) + `; $ps=@(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($target,[StringComparison]::OrdinalIgnoreCase) -ge 0 }); foreach($p in $ps){ Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop }; if($ps.Count -gt 0){ Start-Sleep -Milliseconds 700 }`
+ launcher := filepath.Join(dir,"Meridian.exe")
+ script := "$launcher="+psQuote(launcher)+"; $app="+psQuote(app)+`
+ $ErrorActionPreference='Stop'
+ function MeridianProcesses {
+   @(Get-CimInstance Win32_Process -Filter "Name='Meridian.exe' OR Name='python.exe' OR Name='pythonw.exe'" |
+     Where-Object {
+       ($_.Name -ieq 'Meridian.exe' -and $_.ExecutablePath -and
+         [string]::Equals($_.ExecutablePath,$launcher,[StringComparison]::OrdinalIgnoreCase)) -or
+       ($_.Name -in @('python.exe','pythonw.exe') -and $_.CommandLine -and
+         $_.CommandLine.IndexOf($app,[StringComparison]::OrdinalIgnoreCase) -ge 0)
+     })
+ }
+ # Shut the frontend first; its child backend then exits when owned.
+ $old=@(MeridianProcesses)
+ foreach($entry in @($old | Where-Object {$_.Name -ieq 'Meridian.exe'})){
+   $p=Get-Process -Id $entry.ProcessId -ErrorAction SilentlyContinue
+   if($null -eq $p){continue}
+   try {
+     if($p.MainWindowHandle -ne [IntPtr]::Zero){
+       [void]$p.CloseMainWindow()
+       [void]$p.WaitForExit(2500)
+     }
+   }catch{}
+   $p.Refresh()
+   if(-not $p.HasExited){
+     Stop-Process -Id $p.Id -Force -ErrorAction Stop
+   }
+ }
+ foreach($entry in @(MeridianProcesses | Where-Object {$_.Name -in @('python.exe','pythonw.exe')})){
+   $p=Get-Process -Id $entry.ProcessId -ErrorAction SilentlyContinue
+   if($null -eq $p){continue}
+   Stop-Process -Id $p.Id -Force -ErrorAction Stop
+ }
+ for($i=0;$i -lt 30;$i++){
+   if(@(MeridianProcesses).Count -eq 0){Start-Sleep -Milliseconds 350; exit 0}
+   Start-Sleep -Milliseconds 300
+ }
+ throw 'The previous Meridian window is still running. Close Meridian and retry.'
+ `
  if e := quiet("powershell.exe","-NoProfile","-NonInteractive","-Command",script); e!=nil {
-  return fmt.Errorf("could not stop a previous Meridian instance: %w", e)
+  return fmt.Errorf("could not close the existing Meridian desktop application before updating: %w",e)
  }
  return nil
 }
+
 func ensurePortFree() error {
  conn,e:=net.DialTimeout("tcp","127.0.0.1:8765",500*time.Millisecond)
  if e==nil {

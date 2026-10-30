@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.13"
+VERSION = "0.2.14"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -503,7 +503,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.13"
+    server_version="Meridian/0.2.14"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
