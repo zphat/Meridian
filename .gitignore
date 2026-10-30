@@ -17,3 +17,11 @@ auth.json
 *.sqlite3-shm
 .env
 .env.*
+
+# Local build and browser test outputs
+*.syso
+node_modules/
+test-artifacts/
+package-lock.json
+
+assets/

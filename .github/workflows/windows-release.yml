@@ -30,7 +30,7 @@ jobs:
       - name: Check source completeness
         shell: pwsh
         run: |
-          if((Get-Content installer-go/main.go -Raw) -notmatch 'appVersion="0.2.13"'){throw "Installer internal version does not match release"}
+          if((Get-Content installer-go/main.go -Raw) -notmatch 'appVersion\s*=\s*"0.2.14"'){throw "Installer internal version does not match release"}
           $needed=@("meridian.py","auth.py","static/auth.html","static/auth-complete.html","static/auth.css","static/auth.js","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go","assets/meridian.png","assets/meridian.ico")
           foreach($p in $needed){ if(!(Test-Path $p)){throw "Missing $p — do not publish incomplete installer."} }
       - name: Test Python
@@ -40,7 +40,8 @@ jobs:
         run: |
           node --check static/app.js
           node --check static/auth.js
-          node --check static/app.js
+          node --check static/metrics.js
+          node tests/metrics.test.cjs
       - name: Embed Meridian asterisk in both Windows executable icons
         shell: pwsh
         run: |
@@ -75,12 +76,20 @@ jobs:
         run: |
           $env:GOOS="windows";$env:GOARCH="amd64";$env:CGO_ENABLED="0";$env:GO111MODULE="off"
           Push-Location installer-go
-          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.13.exe .
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o ../Meridian-Setup-0.2.14.exe .
+          Pop-Location
+      - name: Verify replacement rollback under a Windows file lock
+        shell: pwsh
+        run: |
+          $env:GO111MODULE="off"
+          Push-Location installer-go
+          go test -v .
+          if($LASTEXITCODE -ne 0){throw "Installer rollback tests failed"}
           Pop-Location
       - name: Confirm installer PE format
         shell: pwsh
         run: |
-          $f=Get-Item Meridian-Setup-0.2.13.exe
+          $f=Get-Item Meridian-Setup-0.2.14.exe
           if($f.Length -lt 1000000){throw "Installer unexpectedly small"}
           $bytes=[IO.File]::ReadAllBytes($f.FullName)
           if($bytes[0] -ne 77 -or $bytes[1] -ne 90){throw "Not a Windows PE executable"}
@@ -90,7 +99,7 @@ jobs:
           python -m pip install pefile
           @'
           import pefile
-          for path in ('Meridian.exe','Meridian-Setup-0.2.13.exe'):
+          for path in ('Meridian.exe','Meridian-Setup-0.2.14.exe'):
               exe=pefile.PE(path)
               entries=getattr(exe,'DIRECTORY_ENTRY_RESOURCE',None)
               if entries is None or not any(e.id==14 for e in entries.entries):
@@ -100,7 +109,7 @@ jobs:
       - name: Install and smoke test on Windows
         shell: pwsh
         run: |
-          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.13.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.14.exe'
           $install=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with code $($install.ExitCode)" }
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
@@ -126,9 +135,12 @@ jobs:
           if($shortcut.IconLocation -notmatch 'meridian-desktop-2026.ico'){throw "Shortcut still uses the old Windows icon: $($shortcut.IconLocation)"}
           $newIcon=Join-Path $root 'assets/meridian-desktop-2026.ico'
           if(-not(Test-Path $newIcon)){throw "Versioned Meridian desktop icon missing from installation"}
+          $shellApp=New-Object -ComObject Shell.Application
+          $identity=$shellApp.Namespace($desktop).ParseName('Meridian.lnk').ExtendedProperty('System.AppUserModel.ID')
+          if($identity -ne 'Meridian.Desktop'){throw "Shortcut does not share the native taskbar identity: $identity"}
           $v=(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Meridian').DisplayVersion
-          if($v -ne '0.2.13'){throw "Installed version metadata incorrect: $v"}
-          Write-Host "Verified installed desktop shortcut icon, executable target, and internal version 0.2.13"
+          if($v -ne '0.2.14'){throw "Installed version metadata incorrect: $v"}
+          Write-Host "Verified installed desktop shortcut icon, executable target, and internal version 0.2.14"
 
           $py=Join-Path $root 'runtime/python.exe'
           $app=Join-Path $root 'meridian.py'
@@ -139,7 +151,7 @@ jobs:
               Start-Sleep -Seconds 1
               try {
                 $h=Invoke-RestMethod 'http://127.0.0.1:18765/api/health' -TimeoutSec 2
-                if ($h.ok -and $h.version -eq '0.2.13') {$healthy=$true;break}
+                if ($h.ok -and $h.version -eq '0.2.14') {$healthy=$true;break}
               } catch {}
             }
             if (-not $healthy) {
@@ -167,13 +179,13 @@ jobs:
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
           $py=Join-Path $root 'runtime/python.exe'
           $app=Join-Path $root 'meridian.py'
-          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.13.exe'
+          $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.14.exe'
           $old=Start-Process -FilePath $py -ArgumentList @("`"$app`"",'--offline','--no-browser','--no-tray','--port','8765') -PassThru -WindowStyle Hidden
           try {
             $started=$false
             for($j=0;$j -lt 40;$j++) {
               Start-Sleep -Milliseconds 500
-              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.13') {$started=$true;break}} catch {}
+              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.14') {$started=$true;break}} catch {}
             }
             if(-not $started){throw 'Pre-upgrade Meridian did not start'}
             $upgrade=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
@@ -185,7 +197,7 @@ jobs:
               $ready=$false
               for($j=0;$j -lt 40;$j++) {
                 Start-Sleep -Milliseconds 500
-                try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.13') {$ready=$true;break}} catch {}
+                try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.14') {$ready=$true;break}} catch {}
               }
               if(-not $ready){throw 'New Meridian did not restart'}
               $state=Invoke-RestMethod 'http://127.0.0.1:8765/api/auth/status'
@@ -207,7 +219,7 @@ jobs:
             $ready=$false
             for($j=0;$j -lt 40;$j++) {
               Start-Sleep -Milliseconds 500
-              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.13'){$ready=$true;break}} catch {}
+              try {$h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health' -TimeoutSec 1; if($h.version -eq '0.2.14'){$ready=$true;break}} catch {}
             }
             if(-not $ready){throw 'Installed Meridian service did not start'}
             # Generate a real one-time challenge/token in the installed database.
@@ -267,13 +279,55 @@ jobs:
             if($icon -eq [IntPtr]::Zero){$icon=[MeridianWindowTest]::GetClassLongPtr($handle,-14)}
             if($icon -eq [IntPtr]::Zero){throw "Native Meridian window has no Windows icon assigned"}
             Write-Host "Native Meridian window and taskbar icon verified"
+            $root=Split-Path $launcher
+            $authFile=Join-Path $env:USERPROFILE '.meridian/auth.json'
+            $authBefore=(Get-FileHash $authFile -Algorithm SHA256).Hash
+            Push-Location $root
+            try {
+              python -c "from meridian import Meridian; a=Meridian(start_worker=False); a.insert('notes',dict(project='latitude',title='Upgrade preservation test',body='Keep this note')); a.close()"
+            } finally {Pop-Location}
+            # This unrelated Python process must survive the Meridian upgrade.
+            $other=Start-Process -FilePath (Get-Command python).Source -ArgumentList @('-c','"import time; time.sleep(120)"') -PassThru -WindowStyle Hidden
+            try {
+              $installer=Join-Path (Get-Location) 'Meridian-Setup-0.2.14.exe'
+              $upgrade=Start-Process -FilePath $installer -ArgumentList '--silent' -PassThru
+              if(-not $upgrade.WaitForExit(90000)){Stop-Process -Id $upgrade.Id -Force;throw 'Upgrade hung with native Meridian open'}
+              if($upgrade.ExitCode -ne 0){
+                Get-Content (Join-Path $env:LOCALAPPDATA 'Meridian/logs/setup.log') -ErrorAction SilentlyContinue
+                throw "Running-app upgrade failed: $($upgrade.ExitCode)"
+              }
+              $p.Refresh();if(-not $p.HasExited){throw 'Old native Meridian.exe was not closed'}
+              $other.Refresh();if($other.HasExited){throw 'Installer stopped an unrelated Python program'}
+              if((Get-FileHash $authFile -Algorithm SHA256).Hash -ne $authBefore){throw 'Upgrade changed saved authentication settings'}
+              Push-Location $root
+              try {
+                python -c "from meridian import Meridian; a=Meridian(start_worker=False); assert any(n['title']=='Upgrade preservation test' for n in a.snapshot()['notes']); a.close()"
+                if($LASTEXITCODE -ne 0){throw 'Upgrade lost saved project data'}
+              } finally {Pop-Location}
+              $reopened=Start-Process -FilePath $launcher -PassThru
+              try {
+                $ready=$false
+                for($n=0;$n -lt 50;$n++){
+                  Start-Sleep -Milliseconds 400;$reopened.Refresh()
+                  if($reopened.HasExited){throw 'Updated native window exited'}
+                  if($reopened.MainWindowHandle -ne [IntPtr]::Zero){$ready=$true;break}
+                }
+                if(-not $ready){throw 'Updated native window failed to open'}
+                $h=Invoke-RestMethod 'http://127.0.0.1:8765/api/health'
+                if($h.version -ne '0.2.14'){throw 'Updated backend version is incorrect'}
+                # Launching again must focus the existing window and then exit.
+                $second=Start-Process -FilePath $launcher -PassThru
+                if(-not $second.WaitForExit(10000)){Stop-Process -Id $second.Id -Force;throw 'Duplicate launch created another persistent process'}
+                Write-Host 'PASS: upgrade with real native window open, exact process cleanup, key/note preservation, reopen, and single-instance launch'
+              } finally {Stop-Process -Id $reopened.Id -Force -ErrorAction SilentlyContinue}
+            } finally {Stop-Process -Id $other.Id -Force -ErrorAction SilentlyContinue}
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
       - uses: actions/upload-artifact@v4
         with:
           name: Meridian-Windows
-          path: Meridian-Setup-0.2.13.exe
+          path: Meridian-Setup-0.2.14.exe
   release:
     if: github.event_name != 'pull_request'
     needs: windows
@@ -288,9 +342,9 @@ jobs:
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
-          tag="v0.2.13"
+          tag="v0.2.14"
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            gh release upload "$tag" Meridian-Setup-0.2.13.exe --repo "$repo" --clobber
+            gh release upload "$tag" Meridian-Setup-0.2.14.exe --repo "$repo" --clobber
           else
-            gh release create "$tag" Meridian-Setup-0.2.13.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Changes include status lights, 48-hour checks, downloads, simplified goals, and repair prompts."
+            gh release create "$tag" Meridian-Setup-0.2.14.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Fixes upgrades while the native app is open; preserves local notes and email settings; adds clear email errors, recovery, quiet monitoring and measured analytics."
           fi
