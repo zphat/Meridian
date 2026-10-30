@@ -77,7 +77,7 @@ func main(){
  if _,err:=os.Stat(py);err!=nil {message("Meridian's internal runtime is missing. Run the Meridian installer again.");return}
  if _,err:=os.Stat(app);err!=nil {message("Meridian application files are missing. Run the installer again.");return}
  if len(os.Args)>1 && strings.HasPrefix(strings.ToLower(os.Args[1]),"meridian:"){
-  if err:=approveDesktopLink(os.Args[1]);err!=nil {message(err.Error())}
+  if err:=approveDesktopLink(os.Args[1]);err!=nil {message(err.Error());os.Exit(1)}
   return
  }
  logPath:=filepath.Join(os.Getenv("LOCALAPPDATA"),"Meridian","logs")
