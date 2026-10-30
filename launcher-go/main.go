@@ -41,5 +41,6 @@ func main(){
  case e:=<-exited:
   if e!=nil {message("Meridian failed to start. Details: "+filepath.Join(logPath,"startup.log")+"\n"+e.Error())}
  case <-time.After(1800*time.Millisecond):
+  // Python continues independently after this launcher closes.
  }
 }
