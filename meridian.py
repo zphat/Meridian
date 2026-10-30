@@ -31,7 +31,7 @@ from auth import AuthManager, AuthError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.9"
+VERSION = "0.2.10"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -503,7 +503,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.9"
+    server_version="Meridian/0.2.10"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -579,10 +579,11 @@ class Handler(BaseHTTPRequestHandler):
             try:cookie=self.app.auth.redeem(token)
             except AuthError:return self.send_auth_html()
             remote=(urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname or '') not in ('127.0.0.1','localhost')
-            self.send_response(303);self.send_header('Location','/')
+            self.send_response(303);self.send_header('Location','/auth/complete')
             self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
             self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.end_headers();return
         if path in ('/auth.js','/auth.css','/favicon.svg'):return self.serve_static(path)
+        if path=='/auth/complete' and self.session_valid():return self.serve_static('/auth-complete.html')
         if not self.session_valid():
             if path.startswith('/api/'):return self.reply({'error':'Sign-in required'},401)
             return self.send_auth_html()
@@ -612,7 +613,7 @@ class Handler(BaseHTTPRequestHandler):
                 email=body.get('email'); password=body.get('password')
                 self.app.auth.configure(email,password,body.get('resend_key'))
                 host=self.headers.get('Host','')
-                try:self.app.auth.issue_link(email,password,'http://'+host)
+                try:self.app.auth.issue_link(email,password,'http://'+host,challenge=body.get('challenge'))
                 except AuthError:
                     self.app.auth.rollback_setup()
                     raise
@@ -621,7 +622,20 @@ class Handler(BaseHTTPRequestHandler):
                 host=self.headers.get('Host','')
                 remote=(urllib.parse.urlsplit('//'+host).hostname or '') not in ('127.0.0.1','localhost')
                 origin=('https://' if remote else 'http://')+host
-                return self.reply(self.app.auth.issue_link(body.get('email'),body.get('password'),origin))
+                return self.reply(self.app.auth.issue_link(body.get('email'),body.get('password'),origin,challenge=body.get('challenge')))
+            if path=="/api/auth/handoff" and method=="POST":
+                cookie=self.app.auth.redeem_handoff(body.get('challenge'))
+                if cookie is None:return self.reply({'authenticated':False})
+                remote=(urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname or '') not in ('127.0.0.1','localhost')
+                data=b'{"authenticated":true}'
+                self.send_response(200)
+                self.send_header('Content-Type','application/json; charset=utf-8')
+                self.send_header('Content-Length',str(len(data)))
+                self.send_header('Cache-Control','no-store')
+                self.send_header('X-Content-Type-Options','nosniff')
+                self.send_header('Referrer-Policy','no-referrer')
+                self.send_header('Set-Cookie','meridian_session='+cookie+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200'+('; Secure' if remote else ''))
+                self.end_headers();self.wfile.write(data);return
             if path=="/api/auth/logout" and method=="POST":
                 self.app.auth.logout(self.headers.get('Cookie',''))
                 self.send_response(204);self.send_header('Set-Cookie','meridian_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')

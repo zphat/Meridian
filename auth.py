@@ -1,5 +1,5 @@
 """Private single-owner email magic links. Never commit owner config or keys."""
-import base64, hashlib, hmac, json, os, secrets, time, urllib.request, urllib.error
+import base64, hashlib, hmac, json, os, re, secrets, time, urllib.request, urllib.error
 from pathlib import Path
 from http.cookies import SimpleCookie
 
@@ -14,6 +14,7 @@ class AuthManager:
             self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS auth_magic(token_hash TEXT PRIMARY KEY,expires INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS auth_sessions(token_hash TEXT PRIMARY KEY,expires INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS auth_handoff(challenge_hash TEXT PRIMARY KEY,magic_hash TEXT UNIQUE NOT NULL,expires INTEGER NOT NULL,approved INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS auth_attempts(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,category TEXT NOT NULL);
             """)
     def configured(self): return self.path.is_file()
@@ -61,7 +62,7 @@ class AuthManager:
             return bool(row and row[0]>int(time.time()))
     def _recent(self,category,seconds):
         return self.conn.execute('SELECT COUNT(*) FROM auth_attempts WHERE category=? AND at>=?',(category,int(time.time())-seconds)).fetchone()[0]
-    def issue_link(self,email,password,origin_url,sender=None):
+    def issue_link(self,email,password,origin_url,sender=None,challenge=None):
         if not self.configured():raise AuthError('Set up Meridian authentication first',503)
         if not isinstance(email,str) or not isinstance(password,str):raise AuthError('Invalid sign-in details',401)
         cfg=self._get_config()
@@ -77,10 +78,16 @@ class AuthManager:
                 raise AuthError('Email or password not recognized',401)
             if self._recent('mail',86400)>=3 or self._recent('mail',300)>0:
                 raise AuthError('A sign-in link was recently sent; wait before requesting another',429)
+            # Challenge belongs only to the waiting app window; never include it in the email.
+            if challenge is not None and (not isinstance(challenge,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',challenge)):
+                raise AuthError('Invalid desktop sign-in challenge',400)
             token=secrets.token_urlsafe(32);url=origin_url.rstrip('/')+'/auth/verify?token='+token
             deliver=sender or self._send_resend
             deliver(cfg,url)
-            self.conn.execute('INSERT INTO auth_magic(token_hash,expires) VALUES(?,?)',(self._hash(token),int(time.time())+600))
+            expires=int(time.time())+600
+            self.conn.execute('INSERT INTO auth_magic(token_hash,expires) VALUES(?,?)',(self._hash(token),expires))
+            if challenge is not None:
+                self.conn.execute('INSERT INTO auth_handoff(challenge_hash,magic_hash,expires,approved) VALUES(?,?,?,0)',(self._hash(challenge),self._hash(token),expires))
             self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'mail'))
             self.conn.commit()
             return {'ok':True,'message':'A one-time sign-in link was sent to the authorized inbox.'}
@@ -89,7 +96,7 @@ class AuthManager:
         data=json.dumps({'from':cfg['from'],'to':[cfg['email']],'subject':'Your Meridian sign-in link',
            'text':'Open this private link on the device running Meridian, or another device connected to Tailscale. It expires in 10 minutes and works once.\n\n'+url+'\n\nIf you did not request this, ignore it.'}).encode()
         req=urllib.request.Request('https://api.resend.com/emails',data=data,headers={
-            'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json','User-Agent':'Meridian/0.2.9'},method='POST')
+            'Authorization':'Bearer '+cfg['resend_key'],'Content-Type':'application/json','User-Agent':'Meridian/0.2.10'},method='POST')
         try:
             with urllib.request.urlopen(req,timeout=12) as response:
                 if response.status not in (200,201,202):raise AuthError('Email service unavailable',502)
@@ -101,12 +108,26 @@ class AuthManager:
         with self.lock,self.conn:
             cur=self.conn.execute('UPDATE auth_magic SET used=1 WHERE token_hash=? AND used=0 AND expires>?',(self._hash(token),now))
             if cur.rowcount!=1:raise AuthError('Invalid, expired or already used sign-in link',401)
+            self.conn.execute('UPDATE auth_handoff SET approved=1 WHERE magic_hash=? AND expires> ?',(self._hash(token),now))
             cookie=secrets.token_urlsafe(40)
             self.conn.execute('INSERT INTO auth_sessions(token_hash,expires) VALUES(?,?)',(self._hash(cookie),now+43200))
             self.conn.execute('DELETE FROM auth_magic WHERE expires<? OR used=1',(now,))
+            self.conn.execute('DELETE FROM auth_handoff WHERE expires<?',(now,))
             self.conn.execute('DELETE FROM auth_sessions WHERE expires<?',(now,))
             self.conn.execute('DELETE FROM auth_attempts WHERE at<?',(now-86400,))
             return cookie
+    def redeem_handoff(self,challenge):
+        """Issue one desktop-only session after the emailed link approves its random challenge."""
+        if not isinstance(challenge,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',challenge):
+            raise AuthError('Invalid desktop sign-in challenge',400)
+        now=int(time.time())
+        with self.lock,self.conn:
+            cur=self.conn.execute('DELETE FROM auth_handoff WHERE challenge_hash=? AND approved=1 AND expires>?',(self._hash(challenge),now))
+            if cur.rowcount!=1:return None
+            cookie=secrets.token_urlsafe(40)
+            self.conn.execute('INSERT INTO auth_sessions(token_hash,expires) VALUES(?,?)',(self._hash(cookie),now+43200))
+            return cookie
+
     def logout(self,cookie_header):
         try:
             c=SimpleCookie();c.load(cookie_header);s=c.get('meridian_session')

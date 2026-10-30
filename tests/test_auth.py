@@ -90,6 +90,32 @@ class AuthHttpTests(unittest.TestCase):
         self.assertEqual(self.req('GET','/api/state')[0],401)
         self.assertEqual(self.req('POST','/api/auth/logout',{},headers={'Cookie':cookie})[0],204)
         self.assertEqual(self.req('GET','/api/state',headers={'Cookie':cookie})[0],401)
+    def test_magic_link_handoff_unlocks_waiting_window(self):
+        self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
+        sent=[];challenge='B'*43
+        with patch.object(AuthManager,'_send_resend',staticmethod(lambda c,u:sent.append(u))):
+            status,_,_=self.req('POST','/api/auth/request',{'email':'owner@example.com','password':'a long test secret','challenge':challenge})
+        self.assertEqual(status,200)
+        self.assertIn(b'false',self.req('POST','/api/auth/handoff',{'challenge':challenge})[2])
+        self.assertIn(b'false',self.req('POST','/api/auth/handoff',{'challenge':'C'*43})[2])
+        self.assertEqual(self.req('POST','/api/auth/handoff',{'challenge':'short'})[0],400)
+        token=sent[0].split('token=')[1]
+        status,headers,_=self.req('GET','/auth/verify?token='+token)
+        self.assertEqual(status,303)
+        self.assertEqual(headers['Location'],'/auth/complete')
+        browser_cookie=headers['Set-Cookie'].split(';')[0]
+        self.assertIn(b'Email link confirmed',self.req('GET','/auth/complete',headers={'Cookie':browser_cookie})[2])
+        status,headers,payload=self.req('POST','/api/auth/handoff',{'challenge':challenge})
+        self.assertEqual(status,200)
+        self.assertTrue(json.loads(payload)['authenticated'])
+        self.assertIn('HttpOnly',headers['Set-Cookie'])
+        desktop_cookie=headers['Set-Cookie'].split(';')[0]
+        self.assertEqual(self.req('GET','/api/state',headers={'Cookie':desktop_cookie})[0],200)
+        self.assertIn(b'false',self.req('POST','/api/auth/handoff',{'challenge':challenge})[2])
+        self.assertEqual(self.req('GET','/api/state')[0],401)
+        stored=[r[0] for r in self.app.conn.execute('SELECT challenge_hash FROM auth_handoff')]
+        self.assertNotIn(challenge,stored)
+
     def test_setup_rollback_if_mail_fails(self):
         def failing(c,u):raise AuthError('email unavailable',502)
         with patch.object(AuthManager,'_send_resend',staticmethod(failing)):
