@@ -203,7 +203,8 @@ jobs:
           '@
             $deep=(& $py -c $script | Out-String).Trim()
             if(-not $deep.StartsWith('meridian://approve?token=')){throw "Could not generate desktop protocol token: $deep"}
-            $handler=Start-Process -FilePath $launcher -ArgumentList $deep -PassThru -Wait -WindowStyle Hidden
+            $handler=Start-Process -FilePath $launcher -ArgumentList $deep -PassThru -WindowStyle Hidden
+            if(-not $handler.WaitForExit(15000)){Stop-Process -Id $handler.Id -Force -ErrorAction SilentlyContinue; throw 'Desktop magic-link handler hung'}
             if($handler.ExitCode -ne 0){throw "Windows desktop magic-link handler returned $($handler.ExitCode)"}
             $web=New-Object Microsoft.PowerShell.Commands.WebRequestSession
             $body=@{challenge=('B'*43)} | ConvertTo-Json -Compress
