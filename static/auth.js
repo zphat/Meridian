@@ -22,7 +22,7 @@
       if(!response.ok)throw new Error(obj.error||'Unable to complete request');
       if(mode==='setup'){
         mode='login';heading.textContent='Check your Proton inbox';description.textContent='Private access is configured and the first one-time sign-in link has been sent. Open it on this computer or through Tailscale.';
-        provider.hidden=true;submit.textContent='Send another link';form.elements.resend_key.value='';
+        provider.hidden=true;form.elements.resend_key.required=false;submit.textContent='Send another link';form.elements.resend_key.value='';
         message.className='good';message.textContent='Sign-in link sent. You may request another after the five-minute cooldown if needed.';
       }else{message.className='good';message.textContent='Check your authorized inbox. The link expires in 10 minutes.';}
       form.elements.password.value='';

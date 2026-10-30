@@ -65,9 +65,12 @@ class AuthManager:
         if not self.configured():raise AuthError('Set up Meridian authentication first',503)
         if not isinstance(email,str) or not isinstance(password,str):raise AuthError('Invalid sign-in details',401)
         cfg=self._get_config()
-        with self.lock,self.conn:
+        with self.lock:
             if self._recent('attempt',900)>=12:raise AuthError('Too many attempts; try again later',429)
             self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'attempt'))
+            # Persist failed attempts BEFORE verifying credentials. Otherwise an
+            # AuthError inside a connection context rolls back the rate limit.
+            self.conn.commit()
             salt=base64.b64decode(cfg['salt']);expected=base64.b64decode(cfg['password_hash'])
             result=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32)
             if not hmac.compare_digest(result,expected) or not hmac.compare_digest(email.strip().lower(),cfg['email']):
@@ -79,6 +82,7 @@ class AuthManager:
             deliver(cfg,url)
             self.conn.execute('INSERT INTO auth_magic(token_hash,expires) VALUES(?,?)',(self._hash(token),int(time.time())+600))
             self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'mail'))
+            self.conn.commit()
             return {'ok':True,'message':'A one-time sign-in link was sent to the authorized inbox.'}
     @staticmethod
     def _send_resend(cfg,url):

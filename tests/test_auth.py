@@ -37,6 +37,16 @@ class AuthUnitTests(unittest.TestCase):
         with self.assertRaises(AuthError):self.app.auth.redeem(token)
         self.app.auth.logout('meridian_session='+cookie)
         self.assertFalse(self.app.auth.check_session('meridian_session='+cookie))
+    def test_failed_attempts_persist_and_are_rate_limited(self):
+        self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
+        for i in range(12):
+            with self.assertRaises(AuthError) as caught:
+                self.app.auth.issue_link('owner@example.com','incorrect','http://127.0.0.1:8765',lambda c,u:None)
+            self.assertEqual(caught.exception.status,401)
+        with self.assertRaises(AuthError) as locked:
+            self.app.auth.issue_link('owner@example.com','a long test secret','http://127.0.0.1:8765',lambda c,u:None)
+        self.assertEqual(locked.exception.status,429)
+        self.assertEqual(self.app.conn.execute("SELECT COUNT(*) FROM auth_attempts WHERE category='attempt'").fetchone()[0],12)
     def test_mail_throttle(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
         sent=[]
