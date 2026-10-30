@@ -146,7 +146,18 @@ class AuthHttpTests(unittest.TestCase):
             status,_,_=self.req('POST','/api/auth/request',{'email':'owner@example.com','password':'test-password-123!','challenge':challenge})
         self.assertEqual(status,200)
         code=captured[0]
-        self.assertRegex(code,r'^[0-9]{8}
+        self.assertEqual(len(code),8)
+        self.assertTrue(code.isdecimal())
+        wrong='00000000' if code!='00000000' else '11111111'
+        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':wrong})[0],401)
+        status,headers,_=self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':code})
+        self.assertEqual(status,200)
+        cookie=headers['Set-Cookie'].split(';')[0]
+        self.assertEqual(self.req('GET','/api/state',headers={'Cookie':cookie})[0],200)
+        self.assertEqual(self.req('GET','/api/state')[0],401)
+        self.assertEqual(self.req('POST','/api/auth/confirm-code',{'challenge':challenge,'code':code})[0],401)
+
+    def test_setup_rollback_if_mail_fails(self):
         def failing(c,u):raise AuthError('email unavailable',502)
         with patch.object(AuthManager,'_send_resend',staticmethod(failing)):
             status,_,_=self.req('POST','/api/auth/setup',{'email':'owner@example.com','password':'a long test secret','resend_key':'re_test_valid_token_12345'})
