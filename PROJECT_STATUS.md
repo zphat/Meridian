@@ -1,26 +1,26 @@
-# Meridian — project status (2026-10-29)
+# Meridian — release status
 
-## Goal
-A local-first Windows/Fedora development control center for Latitude, Longitude and Sundial, with credible uptime signals, a 48-hour probe timeline, downloads/visitor analytics, manageable goals and copyable ChatGPT/Claude repair prompts.
+Meridian is a personal local-first development control center for Latitude, Longitude and Sundial. It tracks credible green/yellow/red component checks, 48-hour monitoring samples, Github release download counts, imported website visitors, manageable goals and copyable AI troubleshooting prompts.
 
-## Verified locally
-- Meridian Python backend: 23 automated tests passing.
-- JavaScript dashboard syntax check passes.
-- HTTP smoke test: 3 project records, functional dashboard endpoint, ability to create a note and retrieve it.
-- A Windows x64 PE installer was cross-compiled on Linux, with a bundled application payload.
-- Real-world Windows installer execution has **not yet been verified**.
+## Verification
+- Python backend unit tests: 23 passed locally.
+- JavaScript frontend syntax: passed locally.
+- Native Windows executable: compiled locally for x86-64.
+- Windows GitHub Actions workflow: installs the built installer on a Windows runner and checks the dashboard, three configured projects and note persistence before publishing.
+- The latest passing build artifacts and public release are at https://github.com/zphat/Meridian/releases.
 
-## GitHub publication — INCOMPLETE
-The repository has the Python backend, initial static/index.html and a draft installer workflow. Missing source: static/app.js, static/styles.css, assets, Go installer/launcher sources, and unit tests. **Do not publish a release from an incomplete checkout.** The complete updated source is in the local source archive delivered in ChatGPT.
+## Automatic updates
+The GitHub repository is **public**, and Meridian checks `https://api.github.com/repos/zphat/Meridian/releases/latest` automatically. Update notifications appear when a newer supported release is published. Installers are user-approved: Meridian does not silently run downloaded executables.
 
-## Update channel — NOT YET LIVE
-This repository is private. An unauthenticated installer cannot fetch its private GitHub release metadata. Either keep the repository private and configure an authenticated release read mechanism, or explicitly approve a public release channel. Do not bundle a long-lived GitHub token in the installer.
+## Privacy
+- Project notes, SQLite databases, tokens and customer data must **never** be committed to this repository.
+- The source uses optional tokens from local environment variables; no token is bundled.
+- Remote access should be via an authenticated private network (such as Tailscale Serve), not an unauthenticated public website.
 
-## Next milestone
-1. Transfer the remaining source files to this repository and verify their checksums.
-2. Build and install the compiled installer on a Windows GitHub Actions runner; prove launch and persistent notes.
-3. Publish a versioned GitHub Release containing the actual Windows installer.
-4. Implement an accessible update feed, then test an update notification end-to-end.
-5. Follow with Fedora packaging and native installation tests.
+## Next work
+- Verify a Windows install on the user's actual PC.
+- Continue collecting real data for 48-hour availability and GitHub download charts.
+- Add a matching release workflow and install test for Fedora Linux.
+- Connect privacy-respecting website-visitor analytics with user-granted credentials.
 
-Status labels in the UI must identify *what was checked*: a successful HTTP probe is not proof that local desktop instances are running. Unobserved hours in the 48-hour timeline must remain unknown, not green.
+Traffic analytics cannot appear retroactively unless they were already collected. A successful website probe is not proof that local desktop application instances are running.
