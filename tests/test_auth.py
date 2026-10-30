@@ -68,6 +68,41 @@ class AuthUnitTests(unittest.TestCase):
         self.assertNotIn('<a href=',payload[0]['html'])
         self.assertIn('No link needed',payload[0]['html'])
 
+    def test_upgrade_from_legacy_magic_links_allows_otp(self):
+        import time
+        self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
+        now=int(time.time())
+        with self.app.lock,self.app.conn:
+            for age in (180,120,62):
+                self.app.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(now-age,'mail'))
+        sent=[]
+        reply=self.app.auth.issue_link('owner@example.com','a long test secret','http://127.0.0.1:8765',
+            lambda cfg,url:sent.append(cfg['_one_time_code']),challenge='Y'*43)
+        self.assertTrue(reply['ok'])
+        self.assertEqual(len(sent),1)
+        self.assertEqual(len(sent[0]),8)
+        self.assertTrue(sent[0].isdigit())
+        with self.assertRaises(AuthError) as blocked:
+            self.app.auth.issue_link('owner@example.com','a long test secret','http://127.0.0.1:8765',
+                lambda cfg,url:sent.append('bad'),challenge='Z'*43)
+        self.assertEqual(blocked.exception.status,429)
+        self.assertGreater(blocked.exception.retry_after,0)
+        self.assertLessEqual(blocked.exception.retry_after,60)
+        self.assertEqual(len(sent),1)
+
+    def test_daily_mail_limit_stops_sending(self):
+        import time
+        self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
+        now=int(time.time())
+        with self.app.lock,self.app.conn:
+            for i in range(6):
+                self.app.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(now-120-i,'mail'))
+        with self.assertRaises(AuthError) as blocked:
+            self.app.auth.issue_link('owner@example.com','a long test secret',
+                'http://127.0.0.1:8765',lambda cfg,url:self.fail('email should not be sent'))
+        self.assertEqual(blocked.exception.status,429)
+        self.assertEqual(blocked.exception.retry_after,86400)
+
     def test_mail_throttle(self):
         self.app.auth.configure('owner@example.com','a long test secret','re_test_valid_token_12345')
         sent=[]
@@ -91,6 +126,12 @@ class AuthHttpTests(unittest.TestCase):
         head.update(headers or {})
         conn.request(method,path,payload,headers=head)
         r=conn.getresponse();body=r.read();result=(r.status,dict(r.getheaders()),body);conn.close();return result
+    def test_login_prompts_for_an_email_code(self):
+        html=self.req('GET','/')[2].decode('utf-8')
+        self.assertIn('Email me an eight-digit code',html)
+        self.assertIn('I already have a code',html)
+        self.assertNotIn('Send a sign-in link',html)
+
     def test_all_private_endpoints_locked(self):
         self.assertEqual(self.req('GET','/api/state')[0],401)
         self.assertEqual(self.req('GET','/api/backup')[0],401)

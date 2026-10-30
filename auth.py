@@ -5,8 +5,8 @@ from pathlib import Path
 from http.cookies import SimpleCookie
 
 class AuthError(Exception):
-    def __init__(self, message, status=400):
-        super().__init__(message); self.status=status
+    def __init__(self, message, status=400, retry_after=0):
+        super().__init__(message); self.status=status; self.retry_after=int(retry_after)
 
 class AuthManager:
     def __init__(self,data_dir,connection,lock):
@@ -80,8 +80,17 @@ class AuthManager:
             result=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32)
             if not hmac.compare_digest(result,expected) or not hmac.compare_digest(email.strip().lower(),cfg['email']):
                 raise AuthError('Email or password not recognized',401)
-            if self._recent('mail',86400)>=3 or self._recent('mail',300)>0:
-                raise AuthError('A sign-in link was recently sent; wait before requesting another',429)
+            # A local, password-verified owner should not get locked out for a
+            # whole day because old releases sent a few unusable magic links.
+            # Six messages/day and one/minute cap delivery, with no bypass for
+            # invalid passwords or untrusted origins.
+            day=self._recent('mail',86400)
+            last=self.conn.execute("SELECT MAX(at) FROM auth_attempts WHERE category='mail'").fetchone()[0]
+            retry=max(0,60-(int(time.time())-int(last))) if last else 0
+            if day>=6:
+                raise AuthError('Daily email limit reached (six sign-in emails in 24 hours). Please use a code already sent, or try again tomorrow.',429,86400)
+            if retry:
+                raise AuthError('A verification email was sent recently. Check your inbox, or request another code after the cooldown.',429,retry)
             # Challenge belongs only to the waiting app window; never include it in the email.
             if challenge is not None and (not isinstance(challenge,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',challenge)):
                 raise AuthError('Invalid desktop sign-in challenge',400)
@@ -97,7 +106,7 @@ class AuthManager:
                 self.conn.execute('INSERT OR REPLACE INTO auth_codes(challenge_hash,code_hash,expires,attempts) VALUES(?,?,?,0)',(challenge_hash,self._hash(challenge+':'+code),expires))
             self.conn.execute('INSERT INTO auth_attempts(at,category) VALUES(?,?)',(int(time.time()),'mail'))
             self.conn.commit()
-            return {'ok':True,'message':'A one-time sign-in link was sent to the authorized inbox.'}
+            return {'ok':True,'message':'An eight-digit verification code was sent to the authorized inbox.'}
     @staticmethod
     def _send_resend(cfg,url):
         # Auth emails must not contain clickable HTML links: provider click
