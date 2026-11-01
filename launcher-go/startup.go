@@ -51,7 +51,8 @@ const startupScript = `(() => {
   }
   if(location.origin==='http://127.0.0.1:8765'){
    const view=document.documentElement.dataset.meridianReady;
-   const bg=document.body&&getComputedStyle(document.body).backgroundColor;
+   let bg=document.body&&getComputedStyle(document.body).backgroundColor;
+   if(bg==='rgba(0, 0, 0, 0)')bg=getComputedStyle(document.documentElement).backgroundColor;
    const form=document.querySelector(view==='auth'?'#heading':'#page h1');
    if((view==='auth'||view==='dashboard')&&form&&form.getBoundingClientRect().width>0&&innerWidth>0&&innerHeight>0&&bg!=='rgba(0, 0, 0, 0)'&&bg!=='rgb(255, 255, 255)'){
     window.meridianNativeReady(view,innerWidth,innerHeight);return;

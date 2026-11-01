@@ -40,7 +40,7 @@ async function nativeCheck(label,{retry=false,fullFlow=false}={}){
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.locator('#heading').waitFor({state:'visible',timeout:22000});
   await page.waitForFunction(()=>document.querySelector('#auth-version')?.textContent!=='—');
-  const state=await page.evaluate(()=>({url:location.href,width:innerWidth,height:innerHeight,background:getComputedStyle(document.body).backgroundColor,heading:document.querySelector('#heading').textContent,version:document.querySelector('#auth-version').textContent,emailVisible:document.querySelector('#email').getBoundingClientRect().width>100}));
+  const state=await page.evaluate(()=>({url:location.href,width:innerWidth,height:innerHeight,background:getComputedStyle(document.body).backgroundColor==='rgba(0, 0, 0, 0)'?getComputedStyle(document.documentElement).backgroundColor:getComputedStyle(document.body).backgroundColor,heading:document.querySelector('#heading').textContent,version:document.querySelector('#auth-version').textContent,emailVisible:document.querySelector('#email').getBoundingClientRect().width>100}));
   console.log(label,JSON.stringify(state));
   fs.writeFileSync(path.join(output,label+'.json'),JSON.stringify(state,null,2));
   assert.ok(state.width>500&&state.height>300,'Native renderer has empty bounds');
