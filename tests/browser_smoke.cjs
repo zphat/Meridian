@@ -62,6 +62,7 @@ fs.mkdirSync(output,{recursive:true});
   for(const text of ['INVESTIGATION AND IMPLEMENTATION','ACCEPTANCE CHECKS','exact failed step','scheduled health workflow','https://github.com/'])assert.ok(prompt.includes(text),`Missing repair context: ${text}`);
   await page.screenshot({path:path.join(output,'repair-prompt.png')});
   await page.locator('[data-copy-prompt]').click();
+  await page.waitForFunction(()=>/Copied|Text selected/.test(document.querySelector('#prompt-copy-status').textContent));
   assert.match(await page.locator('#prompt-copy-status').textContent(),/Copied|Text selected/);
   await page.keyboard.press('Escape');
   await card().locator('[data-check-goal]').click();
