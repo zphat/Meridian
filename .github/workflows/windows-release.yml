@@ -31,7 +31,7 @@ jobs:
         shell: pwsh
         run: |
           if((Get-Content installer-go/main.go -Raw) -notmatch 'appVersion\s*=\s*"0.2.15"'){throw "Installer internal version does not match release"}
-          $needed=@("meridian.py","auth.py","static/auth.html","static/auth-complete.html","static/auth.css","static/auth.js","static/app.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go","assets/meridian.png","assets/meridian.ico")
+          $needed=@("meridian.py","auth.py","goal_guidance.py","static/auth.html","static/auth-complete.html","static/auth.css","static/auth.js","static/app.js","static/goals.js","static/index.html","static/styles.css","static/favicon.svg","launcher-go/main.go","installer-go/main.go","assets/meridian.png","assets/meridian.ico")
           foreach($p in $needed){ if(!(Test-Path $p)){throw "Missing $p — do not publish incomplete installer."} }
       - name: Test Python
         run: python -m unittest discover -s tests -v
@@ -39,6 +39,7 @@ jobs:
         shell: pwsh
         run: |
           node --check static/app.js
+          node --check static/goals.js
           node --check static/auth.js
           node --check static/metrics.js
           node tests/metrics.test.cjs
@@ -70,7 +71,7 @@ jobs:
           from pathlib import Path
           r=Path('.')
           with ZipFile('installer-go/payload.zip','w',ZIP_DEFLATED,compresslevel=9) as z:
-              for f in ['meridian.py','auth.py','Meridian.exe'] + [p.as_posix() for folder in ('assets','static') for p in (r/folder).rglob('*') if p.is_file()]:
+              for f in ['meridian.py','auth.py','goal_guidance.py','Meridian.exe'] + [p.as_posix() for folder in ('assets','static') for p in (r/folder).rglob('*') if p.is_file()]:
                   z.write(f,f)
           '@ | python -
       - name: Build installer executable
@@ -115,7 +116,7 @@ jobs:
           $install=Start-Process -FilePath $installer -ArgumentList '--silent' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with code $($install.ExitCode)" }
           $root=Join-Path $env:LOCALAPPDATA 'Programs/Meridian'
-          foreach($f in @('Meridian.exe','meridian.py','auth.py','runtime/python.exe','Uninstall-Meridian.exe','static/app.js','static/auth.html','static/auth-complete.html','static/auth.css','static/auth.js','static/styles.css')) {
+          foreach($f in @('Meridian.exe','meridian.py','auth.py','goal_guidance.py','runtime/python.exe','Uninstall-Meridian.exe','static/app.js','static/goals.js','static/auth.html','static/auth-complete.html','static/auth.css','static/auth.js','static/styles.css')) {
             if (-not (Test-Path (Join-Path $root $f))) { throw "Missing installed file: $f" }
           }
           # A magic link must open the installed app, not another browser tab.
@@ -368,5 +369,5 @@ jobs:
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
             gh release upload "$tag" Meridian-Setup-0.2.15.exe --repo "$repo" --clobber
           else
-            gh release create "$tag" Meridian-Setup-0.2.15.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Fixes upgrades while the native app is open; preserves local notes and email settings; adds clear email errors, recovery, quiet monitoring and measured analytics."
+            gh release create "$tag" Meridian-Setup-0.2.15.exe --repo "$repo" --target "${{ github.sha }}" --title "Meridian $tag" --notes "Windows installer built and smoke-tested on Windows. Adds native startup readiness and blank-page recovery, detailed goal repair prompts, and evidence-based goal rechecks. Existing notes and sign-in settings are preserved."
           fi

@@ -10,6 +10,7 @@ app="$work/pkg"
 install -d "$app/opt/meridian" "$app/usr/bin" "$app/usr/share/applications" "$app/usr/share/icons/hicolor/256x256/apps" "$app/DEBIAN"
 install -m 0644 meridian.py "$app/opt/meridian/meridian.py"
 install -m 0644 auth.py "$app/opt/meridian/auth.py"
+install -m 0644 goal_guidance.py "$app/opt/meridian/goal_guidance.py"
 cp -r static "$app/opt/meridian/static"
 install -m 0644 assets/meridian.png "$app/usr/share/icons/hicolor/256x256/apps/meridian.png"
 cat > "$app/usr/bin/meridian" <<'LAUNCHER'

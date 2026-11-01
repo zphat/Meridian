@@ -40,6 +40,16 @@ The UI stops polling while hidden and checks every thirty seconds when visible, 
 
 Endpoint samples retain fourteen days; download snapshots retain ninety days; imported events are bounded. Personal notes and goals are not pruned. Settings shows local database size and service uptime. These policies limit background work and storage growth; total memory also includes the system WebView2 runtime.
 
+## Repair prompts and goal checks
+
+Each goal has **Repair prompt**, **Check again**, and **Details & evidence** actions. Prompts include the repository, latest collected release/build/site evidence, a task-specific investigation plan, acceptance checks and the results to report. You can review the prompt before copying it. They are prepared locally without an AI API or subscription.
+
+Use **Refresh & check** to refresh sources and check every goal, or check one project/goal. Results show **Verified**, **Still failing**, **Unable to verify**, or **Hands-on check**, with timestamps and source links. A passing selected check completes the goal automatically; a later failed check reopens a goal that Meridian completed. A network outage or missing evidence stays unknown. Goals you completed manually remain your decision.
+
+**Edit goal** selects the proof: a monitored endpoint, a named workflow passing on the current default-branch commit, or a hands-on checklist. The existing Sundial uptime goal checks both the live sync health endpoint and a successful scheduled monitor from the past 24 hours. Stale results, unrelated builds, cancelled jobs and skipped jobs cannot verify it. If frequent monitors fill GitHub's recent activity, Meridian separately retrieves push-triggered builds.
+
+Device recordings, usability, signatures and private backup restores still require their specific acceptance checks. Their detailed checklist is shown in **Details & evidence**; use **I tested it — mark done** after completing it. Verification rules and the latest evidence persist locally; editing acceptance criteria invalidates the previous check. Workspace backups preserve the rules and manual completion, but restored goals require fresh verification.
+
 ## Useful, measured analytics
 
 - Project and 7/30-day filters for observed download increases and imported visitor/pageview data.
