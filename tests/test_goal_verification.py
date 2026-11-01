@@ -29,6 +29,11 @@ class GoalEvidenceTests(unittest.TestCase):
         self.assertEqual(self.check()['state'],'blocked')
         self.p['github']['checked_at']=self.now;self.p['sites'][0]['status']['checked_at']=self.old
         self.assertEqual(self.check()['state'],'blocked')
+    def test_no_connection_is_unknown_not_a_proven_regression(self):
+        self.p['sites'][0]['status'].update(success=False,status=None,error='Connection timed out')
+        result=self.check()
+        self.assertEqual(result['state'],'blocked')
+        self.assertIn('Connection timed out',result['evidence'][0]['detail'])
     def test_old_or_running_monitor_cannot_verify(self):
         self.p['github']['data']['uptime_workflow']['created_at']=self.old
         self.assertEqual(self.check()['state'],'blocked')
@@ -60,6 +65,7 @@ class GoalEvidenceTests(unittest.TestCase):
 class GoalPersistenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.app=Meridian(self.tmp.name,start_worker=False)
+        self.since=iso_now()
         self.url=PROJECTS['latitude']['sites'][0][1]
         self.id=self.app.insert('goals',dict(project='latitude',title='Repair landing page',verification_kind='site',verification_target=self.url))
     def tearDown(self):self.app.close();self.tmp.cleanup()
@@ -67,22 +73,29 @@ class GoalPersistenceTests(unittest.TestCase):
     def probe(self,ok):
         with self.app.conn:self.app.conn.execute('INSERT INTO site_samples(project,label,url,checked_at,success,status,error) VALUES(?,?,?,?,?,?,?)',('latitude','Landing page',self.url,iso_now(),int(ok),200 if ok else 503,'' if ok else 'HTTP 503'))
     def test_verified_goal_completes_and_regression_reopens(self):
-        self.probe(True);self.app.verify_goals(iso_now(),self.id)
+        self.probe(True);self.app.verify_goals(self.since,self.id)
         self.assertEqual((self.goal()['state'],self.goal()['completion_source']),('done','verified'))
         self.app.close();self.app=Meridian(self.tmp.name,start_worker=False)
         self.assertEqual(self.goal()['check']['state'],'verified')
-        self.probe(False);self.app.verify_goals(iso_now(),self.id)
+        self.probe(False);self.app.verify_goals(self.since,self.id)
         self.assertEqual((self.goal()['state'],self.goal()['check']['state']),('todo','failed'))
         self.assertEqual(self.app.verification_report['reopened'],1)
     def test_manual_completion_is_not_silently_reversed(self):
-        self.app.change_goal(self.id,{'state':'done'});self.probe(False);self.app.verify_goals(iso_now(),self.id)
+        self.app.change_goal(self.id,{'state':'done'});self.probe(False);self.app.verify_goals(self.since,self.id)
         self.assertEqual(self.goal()['state'],'done');self.assertEqual(self.goal()['check']['state'],'failed')
+    def test_connection_loss_does_not_reopen_verified_goal(self):
+        self.probe(True);self.app.verify_goals(self.since,self.id)
+        self.probe(False)
+        with self.app.conn:self.app.conn.execute('UPDATE site_samples SET status=NULL,error=? WHERE id=(SELECT MAX(id) FROM site_samples)',('Connection timed out',))
+        self.app.verify_goals(self.since,self.id)
+        self.assertEqual(self.goal()['state'],'done')
+        self.assertEqual(self.goal()['check']['state'],'blocked')
     def test_editing_acceptance_invalidates_old_verification(self):
-        self.probe(True);self.app.verify_goals(iso_now(),self.id)
+        self.probe(True);self.app.verify_goals(self.since,self.id)
         self.app.change_goal(self.id,{'description':'A different acceptance requirement'})
         self.assertEqual(self.goal()['state'],'todo');self.assertIsNone(self.goal()['check'])
     def test_backup_restores_rules_without_trusting_old_proof(self):
-        self.probe(True);self.app.verify_goals(iso_now(),self.id)
+        self.probe(True);self.app.verify_goals(self.since,self.id)
         backup=self.app.backup();self.app.restore(backup)
         g=next(g for g in self.app.snapshot()['goals'] if g['title']=='Repair landing page')
         self.assertEqual(g['rule'],{'kind':'site','target':self.url});self.assertIsNone(g['check'])

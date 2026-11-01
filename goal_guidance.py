@@ -130,9 +130,12 @@ def evaluate(goal, project, since, now):
 
     def site_check(site):
         status = (site or {}).get('status') or {}
-        state = 'blocked' if not fresh(status.get('checked_at')) else 'verified' if status.get('success') else 'failed'
+        collected = fresh(status.get('checked_at'))
+        # A timeout or unavailable local connection is not proof of a regression.
+        # HTTP failures and invalid health responses are observable failures.
+        state = 'blocked' if not collected or status.get('status') is None else 'verified' if status.get('success') else 'failed'
         evidence.append({'label': (site or {}).get('label', 'Endpoint'), 'state': state,
-                         'detail': 'No fresh probe available.' if state == 'blocked' else status.get('error') or ('HTTP ' + str(status.get('status'))),
+                         'detail': 'No fresh probe available.' if not collected else status.get('error') or ('HTTP ' + str(status.get('status'))),
                          'url': (site or {}).get('url', ''), 'checked_at': status.get('checked_at')})
         return state
 
@@ -162,7 +165,7 @@ def evaluate(goal, project, since, now):
         if not site: return finish('blocked', 'Choose a monitored endpoint in Edit goal before checking.')
         state = site_check(site)
         return finish(state, {'verified': 'Selected endpoint is responding correctly now. This confirms the current probe, not continuous uptime.',
-                              'failed': 'Selected endpoint still fails its check.', 'blocked': 'Could not obtain a fresh endpoint check.'}[state])
+                              'failed': 'Selected endpoint still fails its check.', 'blocked': 'Could not confirm endpoint health; inspect the connection evidence below.'}[state])
     if rule['kind'] == 'build':
         run = next((r for r in data.get('workflows', []) if str(r.get('workflow_id')) == rule['target']), None)
         state = workflow_check(run, require_head=True)
