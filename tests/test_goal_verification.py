@@ -24,6 +24,9 @@ class GoalEvidenceTests(unittest.TestCase):
         self.p['sites'][0]['status']['success']=False
         self.assertEqual(self.check()['state'],'failed')
     def test_stale_or_error_cache_cannot_verify(self):
+        self.p['github']['data']['evidence_checked_at']=self.old
+        self.assertEqual(self.check()['state'],'blocked','Reassembling a cached snapshot is not fresh proof')
+        del self.p['github']['data']['evidence_checked_at']
         self.p['github']['error']='API rate limit';self.assertEqual(self.check()['state'],'blocked')
         self.p['github']['error']='';self.p['github']['checked_at']=self.old
         self.assertEqual(self.check()['state'],'blocked')
@@ -83,6 +86,12 @@ class GoalPersistenceTests(unittest.TestCase):
     def test_manual_completion_is_not_silently_reversed(self):
         self.app.change_goal(self.id,{'state':'done'});self.probe(False);self.app.verify_goals(self.since,self.id)
         self.assertEqual(self.goal()['state'],'done');self.assertEqual(self.goal()['check']['state'],'failed')
+    def test_rechecking_an_old_completion_keeps_its_original_day(self):
+        self.probe(True);self.app.verify_goals(self.since,self.id)
+        old='2026-10-01T12:00:00+00:00'
+        with self.app.conn:self.app.conn.execute('UPDATE goals SET completed_at=? WHERE id=?',(old,self.id))
+        self.probe(True);self.app.verify_goals(self.since,self.id)
+        self.assertEqual(self.goal()['completed_at'],old)
     def test_connection_loss_does_not_reopen_verified_goal(self):
         self.probe(True);self.app.verify_goals(self.since,self.id)
         self.probe(False)
@@ -105,7 +114,7 @@ class GoalPersistenceTests(unittest.TestCase):
         self.assertEqual(self.goal()['verification_target'],before['verification_target'])
     def test_duplicate_refresh_is_not_started_and_other_projects_not_fetched(self):
         started=threading.Event();release=threading.Event();seen=[]
-        def github(pid=None):seen.append(pid);started.set();release.wait(2)
+        def github(pid=None,fresh=False):seen.append(pid);started.set();release.wait(2)
         self.app.github_sync=github;self.app.site_sync=lambda pid=None:self.probe(True)
         self.assertTrue(self.app.refresh_async(verify=True,goal_id=self.id));self.assertTrue(started.wait(1))
         self.assertFalse(self.app.refresh_async(verify=True,goal_id=self.id))

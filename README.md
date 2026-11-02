@@ -1,4 +1,4 @@
-# Meridian 0.2.15
+# Meridian 0.2.16
 
 A local development dashboard for Latitude, Longitude and Sundial. Your goals, notes, decisions and email credentials stay on your computer.
 
@@ -26,15 +26,23 @@ Email requests allow one per minute and six per rolling 24 hours. The UI shows t
 
 To repair a key, open **Fix email delivery** on the local sign-in screen. Your authorized email and password are still required. A replacement key is saved only after Resend accepts the email; it cannot change the authorized inbox or bypass email verification. Upgrades retain an already configured key. Never commit `auth.json`, `.env` files, backups or SQLite data to GitHub.
 
+## GitHub access and request limits
+
+Settings → **GitHub connection** offers an optional token field. Create a fine-grained GitHub personal access token with **Public repositories (read-only)** access; these public projects need no write permissions. Paste the token into the local app and select **Test & save token**. A failed validation preserves the existing setting. Credentials stay in `github-credentials.json` in the user's data directory, outside the installation, and are excluded from workspace exports and Git. `MERIDIAN_GITHUB_TOKEN` remains supported and takes precedence.
+
+Unauthenticated requests share GitHub's small IP-based allowance with other apps. Meridian caches responses across restarts, serializes all GitHub API reads (including update checks), honors primary and secondary rate backoff, and shows one understandable notice with a local retry time. Website probes and saved planning data remain available during a GitHub pause. A token increases the available allowance; GitHub remains the authority on its limits.
+
+Repository metadata is reused for up to six hours, release/issue data for fifteen minutes, and recent runs/commits for two minutes during ordinary monitoring. Explicit build/uptime goal checks revalidate their workflow and current-commit evidence; cached metadata cannot make an old build look freshly verified. Individual endpoint or hands-on checks avoid unnecessary forced GitHub requests. The last successful data remains available when a request fails.
+
 ## Lightweight monitoring
 
 Settings offers three modes:
 
-| Mode | Endpoint probes | GitHub refresh |
-| --- | --- | --- |
-| Balanced | Every 5 minutes | Every 30 minutes |
-| Quiet | Every 15 minutes | Every hour |
-| Paused | Manual only | Manual only |
+| Mode | Endpoint probes | Public GitHub access | With GitHub token |
+| --- | --- | --- | --- |
+| Balanced | Every 5 minutes | Every 60 minutes | Every 30 minutes |
+| Quiet | Every 15 minutes | Every 90 minutes | Every 60 minutes |
+| Paused | Manual only | Manual only | Manual only |
 
 The UI stops polling while hidden and checks every thirty seconds when visible, briefly faster during a refresh. Unchanged state returns no dashboard payload and does not rebuild the page. The backend sleeps until the next scheduled job. GitHub uses conditional requests and respects API rate-limit resets. Certificate-expiry checks are reused for six hours. Release checks continue every six hours in every mode.
 
@@ -49,6 +57,12 @@ Use **Refresh & check** to refresh sources and check every goal, or check one pr
 **Edit goal** selects the proof: a monitored endpoint, a named workflow passing on the current default-branch commit, or a hands-on checklist. The existing Sundial uptime goal checks both the live sync health endpoint and a successful scheduled monitor from the past 24 hours. Stale results, unrelated builds, cancelled jobs and skipped jobs cannot verify it. If frequent monitors fill GitHub's recent activity, Meridian separately retrieves push-triggered builds.
 
 Device recordings, usability, signatures and private backup restores still require their specific acceptance checks. Their detailed checklist is shown in **Details & evidence**; use **I tested it — mark done** after completing it. Verification rules and the latest evidence persist locally; editing acceptance criteria invalidates the previous check. Workspace backups preserve the rules and manual completion, but restored goals require fresh verification.
+
+## Daily completions and history
+
+The overview and project cards show **Completed today**, using the computer's local calendar day. Today's finished goals remain in a collapsible section of the project plan. On the next day they leave that section and appear in **Completed** history, grouped by completion date. The sidebar opens all-project history; each project also has its own Completed tab. All original goal data and evidence remain available, and a goal can be reopened from history.
+
+The date rolls over while the app is open, including after a hidden window becomes visible. Daylight-saving changes and UTC midnight do not reset the local day early. Rechecking an already-completed goal preserves its original completion date. Older imported completions without a recorded date appear under earlier/undated history. Lifetime project progress remains clearly labelled separately from today's count.
 
 ## Useful, measured analytics
 

@@ -1,6 +1,8 @@
 """Disposable browser fixture. No network calls, production data or real mail."""
 import datetime as dt
 import copy
+import json,time,urllib.error
+from io import BytesIO
 import sys,tempfile
 from pathlib import Path
 from http.server import ThreadingHTTPServer
@@ -14,6 +16,10 @@ class QuietHandler(Handler):
         # Test-only control. Never included in a packaged application.
         if self.path.startswith('/__test/checks/'):
             self.server.fail_checks=self.path.endswith('/fail')
+            return self.reply({'ok':True})
+        if self.path=='/__test/github-limit':
+            self.server.meridian.github_access.state.update(reason='rate_limited',pause_until=time.time()+600,remaining=0,limit=60,reset_at=int(time.time()+600))
+            self.server.meridian.github_access._persist()
             return self.reply({'ok':True})
         return super().do_POST()
 
@@ -33,7 +39,7 @@ with tempfile.TemporaryDirectory() as data:
                 app.conn.execute('INSERT INTO downloads(project,release_tag,asset,counted_at,total) VALUES(?,?,?,?,?)',(p,app.snapshot()['projects'][list(PROJECTS).index(p)]['github']['data']['release']['tag_name'],'Setup.exe',stamp,500-day*17))
                 app.conn.execute('INSERT INTO web_analytics(project,date,visitors,pageviews) VALUES(?,?,?,?)',(p,stamp[:10],30+day*2,70+day*6))
     server=ThreadingHTTPServer(('127.0.0.1',0),QuietHandler);server.meridian=app;server.fail_checks=False
-    def github_sync(project_id=None):
+    def github_sync(project_id=None,fresh=False):
         for p in app.snapshot()['projects']:
             if project_id and p['id']!=project_id:continue
             data=copy.deepcopy(p['github']['data'])
@@ -48,7 +54,16 @@ with tempfile.TemporaryDirectory() as data:
         return {'success':ok,'status':200 if ok else 503,'latency_ms':140,'tls_days':62,
                 'checked_at':iso_now(),'error':'' if ok else 'HTTP 503'}
     app.github_sync=github_sync;app.check_url=check_url
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self,n=-1):return json.dumps({'resources':{'core':{'limit':5000,'remaining':4998,'reset':int(time.time()+3600)}}}).encode()
+    def github_response(request,**kwargs):
+        if request.full_url!='https://api.github.com/rate_limit':raise AssertionError('Unexpected fixture network request')
+        if 'invalid' in request.get_header('Authorization',''):
+            raise urllib.error.HTTPError(request.full_url,401,'Invalid token',{},BytesIO(b'{}'))
+        return Response()
     print(server.server_port,flush=True)
     try:
-        with patch('auth.secrets.randbelow',return_value=13572468):server.serve_forever()
+        with patch('auth.secrets.randbelow',return_value=13572468),patch('github_access.urllib.request.urlopen',side_effect=github_response):server.serve_forever()
     finally:server.server_close();app.close()

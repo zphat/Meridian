@@ -12,7 +12,7 @@ fs.mkdirSync(output,{recursive:true});
  try{
   const port=await new Promise((resolve,reject)=>{server.stdout.once('data',x=>resolve(String(x).trim()));server.once('exit',()=>reject(Error(errors)));setTimeout(()=>reject(Error('Fixture server startup timed out: '+errors)),15000).unref();});
   browser=await chromium.launch({headless:true,channel:"chromium",executablePath:process.env.MERIDIAN_CHROME_EXECUTABLE,args:['--no-sandbox']});
-  const page=await browser.newPage({viewport:{width:1280,height:850}});
+  const page=await browser.newPage({viewport:{width:1280,height:850},timezoneId:'America/Chicago'});
   const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
   await page.goto('http://127.0.0.1:'+port);
   await page.locator('#resend_key').waitFor({state:'visible'});
@@ -33,7 +33,7 @@ fs.mkdirSync(output,{recursive:true});
   // Every page fits both a small desktop window and a phone width.
   for(const width of [1280,800,390]){
    await page.setViewportSize({width,height:850});
-   for(const view of ['overview','latitude','longitude','sundial','activity','analytics','settings']){
+   for(const view of ['overview','latitude','longitude','sundial','activity','completed','analytics','settings']){
     await page.evaluate(view=>{location.hash=view},view);
     await page.waitForFunction(view=>document.querySelector('#crumb-current').textContent.toLowerCase()===(view==='overview'?'overview':view),view);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`${view} overflows at ${width}px`);
@@ -109,15 +109,55 @@ fs.mkdirSync(output,{recursive:true});
   await page.screenshot({path:path.join(output,'goals.png'),fullPage:true});
   await page.reload();await page.locator('#page h1').waitFor();
   assert.equal(await page.evaluate(id=>model.goals.find(g=>g.id===id).check.state,custom.id),'verified');
+  // One clear allowance notice, local token setup, and secret-free API state.
+  await page.request.post('http://127.0.0.1:'+port+'/__test/github-limit');
+  await page.evaluate(async()=>{location.hash='overview';await load(true)});
+  await page.getByText('GitHub refresh paused',{exact:true}).waitFor();
+  assert.equal(await page.getByText('GitHub refresh paused',{exact:true}).count(),1);
+  await page.getByRole('link',{name:'Open GitHub settings'}).click();
+  await page.locator('[data-modal="github"]').click();
+  await page.setViewportSize({width:390,height:850});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'GitHub setup overflows a small window');
+  const token='github_pat_browser_fixture_12345';
+  await page.locator('#github-token').fill(token);
+  await page.locator('#modal-form [type="submit"]').click();
+  await page.waitForFunction(()=>model.github_access.authenticated);
+  assert.ok(!(await (await page.request.get('http://127.0.0.1:'+port+'/api/state')).text()).includes(token));
+  await page.setViewportSize({width:1280,height:850});
+  await page.screenshot({path:path.join(output,'github-settings.png'),fullPage:true});
+  await page.locator('[data-modal="github"]').click();
+  await page.locator('#github-token').fill('github_pat_invalid_fixture_12345');
+  await page.locator('#modal-form [type="submit"]').click();
+  await page.waitForFunction(()=>document.querySelector('#form-error').textContent.includes('did not accept'));
+  await page.locator('#modal-form [data-close]').click();
+  assert.equal(await page.evaluate(()=>model.github_access.authenticated),true,'Rejected replacement discarded the working token');
+  await page.locator('[data-remove-github]').click();
+  await page.waitForFunction(()=>!model.github_access.authenticated);
+  // A local-day rollover must update even when the server returns unchanged state.
+  await page.evaluate(()=>location.hash='overview');
+  await page.waitForFunction(()=>document.querySelector('#crumb-current').textContent==='Overview');
+  assert.ok(Number(await page.locator('.stat-tile').filter({hasText:'Completed today'}).locator('.stat-value').textContent())>=2);
+  await page.clock.install();
+  const tomorrow=await page.evaluate(()=>{const next=new Date();next.setHours(24,0,1,0);return next.getTime()});
+  await page.clock.setFixedTime(tomorrow);
+  await page.route('**/api/state',route=>route.fulfill({status:304}),{times:1});
+  await page.evaluate(()=>load(true));
+  assert.equal(await page.locator('.stat-tile').filter({hasText:'Completed today'}).locator('.stat-value').textContent(),'0');
+  await page.evaluate(()=>location.hash='completed');
+  await page.locator('.completion-day').first().waitFor();
+  assert.ok(await page.locator(`[data-goal-id="${custom.id}"]`).isVisible());
+  await page.screenshot({path:path.join(output,'completion-history.png'),fullPage:true});
+  await page.locator(`[data-goal-id="${custom.id}"] [data-goal-state]`).click();
+  await page.waitForFunction(id=>model.goals.find(g=>g.id===id).state==='todo',custom.id);
+  assert.equal(await page.locator(`[data-goal-id="${custom.id}"]`).count(),0);
   // A hidden dashboard should schedule no recurring UI requests.
   let polls=0;page.on('request',r=>{if(r.url().endsWith('/api/state'))polls++;});
-  await page.clock.install();
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
   const before=polls;await page.clock.runFor(65000);assert.equal(polls,before,'hidden app kept polling');
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.dispatchEvent(new Event('visibilitychange'));});
   await page.locator('#lock-button').click();await page.locator('#heading').waitFor();
   assert.equal((await page.request.get('http://127.0.0.1:'+port+'/api/state')).status(),401);
   assert.deepEqual(pageErrors,[]);
-  console.log('Browser checks passed: setup, code recovery, wrong/correct code, all routes at 3 widths, analytics filters, quiet mode, note save, detailed repair prompt and copy, fresh verification, regression reopening, evidence modals, manual-check honesty, rule editing, persisted results, unchanged-state reuse, hidden polling, lock.');
+  console.log('Browser checks passed: setup, code recovery, wrong/correct code, all routes at 3 widths, analytics filters, quiet mode, note save, detailed repair prompt and copy, fresh verification, regression reopening, evidence modals, manual-check honesty, rule editing, persisted results, GitHub rate notice and token setup/recovery, local midnight completion history, unchanged-state reuse, hidden polling, lock.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
