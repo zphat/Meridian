@@ -36,6 +36,7 @@ class UpdateTests(unittest.TestCase):
         payload={'tag_name':f'v{meridian.VERSION}','html_url':f'https://github.com/zphat/Meridian/releases/tag/v{meridian.VERSION}','assets':[]}
         with patch.object(meridian.urllib.request,'urlopen',return_value=FakeResponse(payload)):
             self.assertEqual(self.app.check_updates()['state'],'up_to_date')
+        with self.app.conn:self.app.conn.execute('DELETE FROM github_http_cache')
         payload['tag_name']='surprise-script'
         with patch.object(meridian.urllib.request,'urlopen',return_value=FakeResponse(payload)):
             self.assertEqual(self.app.check_updates()['state'],'error')

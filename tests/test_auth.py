@@ -5,6 +5,7 @@ from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import meridian
 from meridian import Meridian,Handler
 from auth import AuthError,AuthManager
 
@@ -115,6 +116,20 @@ class AuthUnitTests(unittest.TestCase):
         self.assertEqual(len(sent),1)
 
 class AuthHttpTests(unittest.TestCase):
+    def test_github_credentials_require_authenticated_local_access(self):
+        from unittest.mock import patch
+        payload={'token':'github_pat_'+'fixture_'*5}
+        self.assertEqual(self.req('POST','/api/settings/github',payload)[0],401)
+        self.app.auth.configure('owner@example.com','a long test password','re_fake_testing_key_000')
+        sent=[];self.app.auth.issue_link('owner@example.com','a long test password','http://127.0.0.1',lambda c,u:sent.append(u))
+        cookie='meridian_session='+self.app.auth.redeem(sent[0].split('token=')[1])
+        with patch.object(self.app.github_access,'save_token') as save:
+            self.assertEqual(self.req('POST','/api/settings/github',payload,headers={'Cookie':cookie})[0],200)
+            save.assert_called_once_with(payload['token'])
+        host='meridian-pc.tailnet.ts.net'
+        with patch.object(meridian,'TRUSTED_HOSTS',{host}),patch.object(self.app.github_access,'save_token') as save:
+            status,_,_=self.req('POST','/api/settings/github',payload,headers={'Cookie':cookie,'Host':host,'Origin':'https://'+host})
+            self.assertEqual(status,403);save.assert_not_called()
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.app=Meridian(self.tmp.name,start_worker=False)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler);self.server.meridian=self.app

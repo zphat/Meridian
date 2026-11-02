@@ -25,3 +25,6 @@ test-artifacts/
 package-lock.json
 
 assets/
+
+github-credentials.json
+github-credentials.*.pending

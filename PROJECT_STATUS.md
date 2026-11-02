@@ -1,22 +1,17 @@
-# Meridian — 0.2.15
+# Meridian — 0.2.16
 
-This release addresses intermittent blank native startup with a painted loading page, interface readiness acknowledgement, one timed navigation retry and bounded browser recovery. Goals now provide detailed repair prompts and fresh, explicit verification. It retains the 0.2.14 installer, sign-in and dashboard improvements.
+This release reduces GitHub allowance exhaustion and separates daily goal completions from permanent history. Existing native startup recovery, detailed goal prompts, analytics and local data remain supported.
 
 ## Behavior
 
-- The native window waits for a rendered interface, retries blank navigation after eight seconds and opens browser recovery after twenty-five seconds if necessary. Recovery stops on success or close; it adds no idle worker.
-- Every goal has a reviewable repair prompt with collected context, an investigation plan and acceptance checks. Evidence details show timestamps, source links and the checked commit when relevant.
-- Refresh & check verifies all goals; project and individual checks are available. Selected endpoint/current-commit workflow checks can complete goals automatically. Failed rechecks reopen automatically completed goals; missing evidence stays unknown and manual completions remain explicit.
-- Real-device testing and private backup restores show detailed hands-on checklists. No unrelated green CI run can silently verify these goals. Rules and latest results persist locally without an AI service or new runtime dependency.
-
-- Setup stages application files, closes the installed native window/backend, and restores old files if replacement fails. It preserves user data and email configuration.
-- Shortcuts and the native window share the asterisk icon and taskbar identity. Duplicate launch focuses the open window.
-- Email rejections explain the cause; verified cooldown clicks do not become password failures. The local sign-in form can safely replace a failed Resend key.
-- Balanced, quiet and paused monitoring; hidden UI polling stops, unchanged snapshots avoid rendering, and retained monitoring data is bounded.
-- Filtered, measured download growth; traffic imports; build outcomes; endpoint latency and reliability; completed goals.
+- All GitHub API reads share a serialized request queue, persistent response cache and retry state. Anonymous background polling is slower; explicit build/uptime verification still revalidates the proof. Permission failures, rejected credentials and rate limits remain distinguishable.
+- Settings provides optional, validated GitHub token setup. Tokens remain in a local credentials file, never in state responses or workspace exports. Only an authenticated local session can change credentials; failed replacement keeps the existing setting.
+- One rate-limit notice gives a local retry time and links to settings. Site probes and local planning remain usable while GitHub is paused.
+- Completed today follows the computer's calendar day. Previous completions move into history without deleting goals or evidence. Local midnight, daylight-saving transitions, unchanged-state responses, reopening and repeated verification are covered.
+- New-goal generation remains a future choice: ranked evidence-based suggestions, capped automatic additions, or optional AI prioritization. This release does not silently create extra goals or call an AI service.
 
 ## Verification scope
 
-Python regression tests, JavaScript calculation tests, and real browser tests cover setup, sign-in, navigation, smaller windows, data changes, monitoring preferences and hidden-page behavior. Goal tests cover fresh versus stale evidence, current-commit matching, automatic completion/regression reopening, legacy database migration, rule edits, restore safety, duplicate refreshes, prompt preview/copy and saved results. Windows CI checks five successive launches inside the installed WebView2 and recovery from an intentionally blank initial document, including sign-in and dashboard navigation afterward. It also covers installer rollback, native-window upgrades, icon/shortcut identity and data preservation. Release packages publish only after the platform's required jobs pass.
+Offline backend regressions, date/analytics calculation checks and browser workflows cover cache persistence, conditional requests, shared backoff, token validation and confidentiality, local-only credential changes, midnight rollover, completion history and reopening. Existing Windows tests cover five installed native launches, forced blank-page recovery, sign-in, upgrade preservation and rollback. Linux installers are built and installed separately.
 
-Live delivery to the owner's inbox and the Windows shell cache on the owner's PC remain device-specific checks. No owner credentials are available to automated tests; mail is mocked there. Website analytics remain explicitly imported, and server backup status is not claimed to be connected.
+Live GitHub quotas depend on the owner's network/account. Automated token tests use fake credentials and mock responses. Device-only recording checks and private server backups still require their specific evidence.

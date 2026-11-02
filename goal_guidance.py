@@ -144,7 +144,7 @@ def evaluate(goal, project, since, now):
         detail = 'No current completed workflow is available.'
         if run:
             detail = str(run.get('name') or 'Workflow') + ': ' + str(run.get('conclusion') or run.get('status') or 'unknown')
-            if github.get('error') or not fresh(github.get('checked_at')):
+            if github.get('error') or not fresh(data.get('evidence_checked_at',github.get('checked_at'))):
                 detail = 'GitHub could not be refreshed; stored results cannot prove this fix.'
             elif require_head and (not data.get('head_sha') or run.get('head_sha') != data['head_sha']):
                 detail = 'This workflow has not checked the current default-branch commit.'
@@ -154,7 +154,7 @@ def evaluate(goal, project, since, now):
                 if run.get('conclusion') == 'success': state = 'verified'
                 elif run.get('conclusion') in ('failure', 'timed_out', 'action_required', 'startup_failure'): state = 'failed'
         evidence.append({'label': 'GitHub workflow', 'state': state, 'detail': detail,
-                         'url': (run or {}).get('html_url', ''), 'checked_at': github.get('checked_at'),
+                         'url': (run or {}).get('html_url', ''), 'checked_at': data.get('evidence_checked_at',github.get('checked_at')),
                          'commit': (run or {}).get('head_sha', '')})
         return state
 

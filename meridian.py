@@ -29,10 +29,11 @@ from email.utils import parsedate_to_datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import AuthManager, AuthError
 from goal_guidance import guidance, rule_for, evaluate as evaluate_goal
+from github_access import GitHubAccess, GitHubError, stamp as github_stamp
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.15"
+VERSION = "0.2.16"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -102,13 +103,12 @@ class Meridian:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self.started_at=time.time()
-        self._http_cache={}
         self._tls_cache={}
-        self._github_pause_until=0
         self.update_state = {"state": "not_checked", "current": VERSION, "repository": UPDATE_REPO, "checked_at": None, "release_url": None, "installer_url": None}
         self._update_busy = False
         self.tray_icon = None  # Windows packaged build can issue a system notification.
         self._initialize()
+        self.github_access=GitHubAccess(self.data_dir,self.conn,self.lock,UA)
         self.auth = AuthManager(self.data_dir, self.conn, self.lock)
         if start_worker:
             self.worker = threading.Thread(target=self._loop, name="MeridianMonitor", daemon=True)
@@ -163,29 +163,9 @@ class Meridian:
     def _settings(self):
         return {x["key"]:x["value"] for x in self._get("SELECT * FROM settings")}
 
-    def _github_get(self, path):
-        if self._stop.is_set():raise RuntimeError('Meridian is closing')
-        if time.time()<self._github_pause_until:
-            raise RuntimeError('GitHub rate limit reached. Automatic requests resume after '+dt.datetime.fromtimestamp(self._github_pause_until,dt.timezone.utc).strftime('%H:%M UTC'))
-        url="https://api.github.com"+path
-        headers={"Accept":"application/vnd.github+json", "User-Agent": UA, "X-GitHub-Api-Version":"2022-11-28"}
-        token=os.environ.get("MERIDIAN_GITHUB_TOKEN", "").strip()
-        if token: headers["Authorization"]="Bearer "+token
-        cached=self._http_cache.get(path)
-        if cached and cached[0]:headers['If-None-Match']=cached[0]
-        req=urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req,timeout=13) as resp:
-                result=json.loads(resp.read(1400000).decode("utf-8"))
-                self._http_cache[path]=(resp.headers.get('ETag'),result)
-                return result
-        except urllib.error.HTTPError as e:
-            if e.code==304 and cached:return cached[1]
-            if e.code in (403,429) and (e.headers.get('X-RateLimit-Remaining')=='0' or e.code==429):
-                try:self._github_pause_until=max(time.time()+60,float(e.headers.get('X-RateLimit-Reset',time.time()+3600)))
-                except ValueError:self._github_pause_until=time.time()+3600
-            msg=e.read(800).decode("utf-8",errors="replace")
-            raise RuntimeError("GitHub HTTP %s: %s"%(e.code,msg[:160])) from e
+    def _github_get(self, path, force=False):
+        if self._stop.is_set():raise GitHubError('Meridian is closing')
+        return self.github_access.get(path,force=force)
 
     def _roadmap(self, repo, branch):
         """Fetch human-authored roadmap text when present; don't invent status."""
@@ -210,7 +190,7 @@ class Meridian:
             for kind,key,title,detail,link,when in events:
                 self.conn.execute("INSERT OR IGNORE INTO events(project,kind,external_id,title,detail,link,happened_at) VALUES(?,?,?,?,?,?,?)",(p,kind,str(key),title[:350],detail[:800],link[:600],when or iso_now()))
 
-    def github_sync(self, project_id=None):
+    def github_sync(self, project_id=None, fresh=False):
         for p,config in PROJECTS.items():
             if project_id and p != project_id:continue
             if self._stop.is_set():break
@@ -218,8 +198,12 @@ class Meridian:
             try:
                 repo=self._github_get("/repos/"+name)
                 releases=self._github_get("/repos/"+name+"/releases?per_page=6")
-                workflows=self._github_get("/repos/"+name+"/actions/runs?per_page=50")
-                commits=self._github_get("/repos/"+name+"/commits?per_page=15")
+                workflow_path='/repos/'+name+'/actions/runs?per_page=50'
+                commit_path='/repos/'+name+'/commits?per_page=15'
+                # Live goal checks revalidate the proof; ancillary metadata can use cache.
+                workflows=self._github_get(workflow_path,force=True) if fresh else self._github_get(workflow_path)
+                commits=self._github_get(commit_path,force=True) if fresh else self._github_get(commit_path)
+                evidence_paths=[workflow_path,commit_path]
                 issues=self._github_get("/repos/"+name+"/issues?state=open&per_page=40")
                 latest=releases[0] if releases else None
                 runs=workflows.get("workflow_runs",[])
@@ -229,7 +213,9 @@ class Meridian:
                 # One filtered query keeps real build evidence discoverable.
                 if not builds:
                     branch=urllib.parse.quote(repo.get('default_branch') or 'main',safe='')
-                    pushed=self._github_get('/repos/'+name+'/actions/runs?event=push&branch='+branch+'&per_page=50')
+                    pushed_path='/repos/'+name+'/actions/runs?event=push&branch='+branch+'&per_page=50'
+                    pushed=self._github_get(pushed_path,force=True) if fresh else self._github_get(pushed_path)
+                    evidence_paths.append(pushed_path)
                     builds=[r for r in pushed.get('workflow_runs',[]) if not is_monitor(r) and r.get('head_branch')==repo.get('default_branch')]
                 ci=next(iter(builds),None)
                 uptime=next((r for r in runs if (r.get('path')==config['uptime_workflow_path'] if config.get('uptime_workflow_path') else is_monitor(r)) and r.get('head_branch')==repo.get('default_branch')),None)
@@ -249,6 +235,9 @@ class Meridian:
                 obj['head_sha']=commits[0].get('sha') if commits else None
                 obj['ci']={k:ci.get(k) for k in fields} if ci else None
                 obj['uptime_workflow']={k:uptime.get(k) for k in fields} if uptime else None
+                stamps=[self.github_access.validated_at(path) for path in evidence_paths]
+                known=[value for value in stamps if value is not None]
+                obj['evidence_checked_at']=github_stamp(min(known)) if known else iso_now()
                 self._cache("github:"+p,obj)
                 events=[]
                 for r in releases[:4]:
@@ -322,7 +311,12 @@ class Meridian:
         since=iso_now()
         try:
             if kind in ("all","github"):
-                self.github_sync(project_id) if project_id else self.github_sync()
+                needs_fresh_github=verify
+                if verify and goal_id is not None:
+                    with self.lock:goal=self.conn.execute('SELECT * FROM goals WHERE id=?',(goal_id,)).fetchone()
+                    needs_fresh_github=bool(goal and rule_for(dict(goal))['kind'] in ('build','uptime'))
+                if needs_fresh_github:self.github_sync(project_id,fresh=True)
+                else:self.github_sync(project_id) if project_id else self.github_sync()
             if kind in ("all","sites"):
                 self.site_sync(project_id) if project_id else self.site_sync()
             if verify:self.verify_goals(since,goal_id,project_id)
@@ -378,13 +372,8 @@ class Meridian:
         if not re.fullmatch(r"[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+", UPDATE_REPO):
             state={"state":"not_configured","detail":"Set a valid MERIDIAN_UPDATE_REPO (owner/repository)."}
         else:
-            url=f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
-            headers={"Accept":"application/vnd.github+json", "User-Agent":UA,"X-GitHub-Api-Version":"2022-11-28"}
-            token=os.environ.get("MERIDIAN_GITHUB_TOKEN", "").strip()
-            if token: headers["Authorization"]="Bearer "+token
             try:
-                with urllib.request.urlopen(urllib.request.Request(url,headers=headers),timeout=12) as res:
-                    release=json.loads(res.read(500000).decode("utf-8"))
+                release=self._github_get('/repos/'+UPDATE_REPO+'/releases/latest')
                 latest=str(release.get("tag_name") or "").lstrip("vV")
                 if not re.fullmatch(r"\d+\.\d+\.\d+",latest):
                     raise ValueError("Latest release tag must be a version such as v0.2.1")
@@ -414,11 +403,11 @@ class Meridian:
                             installer=url
                             break
                 state={"state":"available" if available else "up_to_date","latest":latest,"release_url":page,"installer_url":installer,"detail":("A newer installer is available. Open Settings to download it." if installer else "A newer release is available; see its release page for your platform.") if available else "You have the latest published version."}
-            except urllib.error.HTTPError as e:
-                if e.code==404:
+            except GitHubError as e:
+                if e.status==404:
                     state={"state":"private_or_unpublished", "detail":"GitHub returned 404. The Meridian repository is private or has no published release; private releases require an authenticated update feed, or a public release repository."}
                 else:
-                    state={"state":"error", "detail":f"GitHub returned HTTP {e.code}."}
+                    state={"state":"error", "detail":str(e)}
             except (OSError, ValueError, json.JSONDecodeError) as e:
                 state={"state":"error", "detail":str(e)[:170]}
         with self.lock:
@@ -486,15 +475,18 @@ class Meridian:
         while not self._stop.is_set():
             self._wake.clear()
             mode=self._settings().get('monitor_mode','balanced')
-            if mode!=previous_mode:next_gh=next_sites=0;previous_mode=mode
-            gh_interval,site_interval=(3600,900) if mode=='quiet' else (1800,300)
+            schedule_key=(mode,self.github_access.state.get('identity'))
+            if schedule_key!=previous_mode:next_gh=next_sites=0;previous_mode=schedule_key
+            gh_interval=self.github_access.poll_seconds(mode)
+            site_interval=900 if mode=='quiet' else 300
             now=time.monotonic()
             if now>=next_updates:
                 self.check_updates_async()
                 next_updates=time.monotonic()+6*3600
             if mode!='paused' and now>=next_gh:
                 self.run_sync("github")
-                next_gh=time.monotonic()+gh_interval
+                remaining_pause=self.github_access.state.get('pause_until',0)-time.time()
+                next_gh=time.monotonic()+(remaining_pause+1 if remaining_pause>0 else gh_interval)
             if self._stop.is_set():break
             if mode!='paused' and time.monotonic()>=next_sites:
                 self.run_sync("sites")
@@ -547,7 +539,7 @@ class Meridian:
                 release=gh["data"].get("release") or {}
                 obj["latest_downloads"]=sum(int(a.get("total",0)) for a in dl if a["project"]==p and a["release_tag"]==release.get("tag_name", ""))
                 project_details.append(obj)
-            return {"projects":project_details,"goals":goals,"verification_report":dict(self.verification_report),"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
+            return {"projects":project_details,"goals":goals,"github_access":self.github_access.status(),"verification_report":dict(self.verification_report),"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
                 "runtime":{"uptime_seconds":int(time.time()-self.started_at),'database_bytes':sum(p.stat().st_size for p in self.data_dir.glob('meridian.sqlite3*') if p.is_file()),'probe_retention_days':14,'download_retention_days':90}}
 
     def insert(self,table,data):
@@ -663,7 +655,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.15"
+    server_version="Meridian/0.2.16"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -823,6 +815,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(204);self.send_header('Set-Cookie','meridian_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
                 self.send_header('Cache-Control','no-store');self.end_headers();return
             if not self.session_valid():return self.reply({'error':'Sign-in required'},401)
+            if path=='/api/settings/github' and method in ('POST','DELETE'):
+                host=urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname
+                if host not in ('127.0.0.1','localhost'):return self.reply({'error':'GitHub credentials can only be changed in the local desktop'},403)
+                if method=='POST':self.app.github_access.save_token(body.get('token'))
+                else:self.app.github_access.remove_token()
+                self.app._wake.set()
+                return self.reply({'ok':True,'github_access':self.app.github_access.status()})
             if path=='/api/settings/monitoring' and method=='POST':
                 self.app.set_monitor_mode(body.get('mode'))
                 return self.reply({'ok':True})

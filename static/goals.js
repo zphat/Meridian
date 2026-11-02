@@ -2,6 +2,14 @@
 const goalCheckLabels={verified:'Verified',failed:'Still failing',blocked:'Unable to verify',manual:'Hands-on check',not_checked:'Not checked'};
 const goalCheckTones={verified:'good',failed:'bad',blocked:'warn',manual:'dim',not_checked:'dim'};
 let goalDialogReturn=null;
+function dailyGoals(pid=null){return MeridianMetrics.goalDays(goals(pid));}
+function completionHistory(pid=null){
+ const buckets=dailyGoals(pid),completed=[...buckets.today,...buckets.history];
+ if(!completed.length)return empty('Completed goals will appear here with their evidence and completion date.','check');
+ const groups=new Map();for(const goal of completed){const day=goal.completed_at?MeridianMetrics.localDay(goal.completed_at):'';if(!groups.has(day))groups.set(day,[]);groups.get(day).push(goal);}
+ return `<p class="caption-line">${buckets.today.length} completed today · ${buckets.history.length} earlier. Dates follow this computer’s local time. Reopening a goal returns it to the active list.</p>`+[...groups].map(([day,items])=>`<section class="completion-day"><div class="panel-header"><h3>${day===buckets.day?'Today':day?esc(new Intl.DateTimeFormat(undefined,{dateStyle:'full'}).format(new Date(day+'T12:00:00'))):'Earlier completions · date not recorded'}</h3>${pill(items.length+' completed','dim')}</div><div class="panel">${items.map(g=>goalCard(g)).join('')}</div></section>`).join('');
+}
+function completedPage(){return heading('Workspace / history','Completed goals','A permanent record of finished work. Earlier days do not count toward today.')+completionHistory();}
 function goalCheckState(g){return g.check?.state||(g.rule?.kind==='manual'?'manual':'not_checked');}
 function goalRuleLabel(g){
  const rule=g.rule||{kind:'manual'},p=project(g.project);
