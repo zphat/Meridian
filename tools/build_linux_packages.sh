@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-version="0.2.14"
+version="0.2.15"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 mkdir -p dist-linux
@@ -10,6 +10,7 @@ app="$work/pkg"
 install -d "$app/opt/meridian" "$app/usr/bin" "$app/usr/share/applications" "$app/usr/share/icons/hicolor/256x256/apps" "$app/DEBIAN"
 install -m 0644 meridian.py "$app/opt/meridian/meridian.py"
 install -m 0644 auth.py "$app/opt/meridian/auth.py"
+install -m 0644 goal_guidance.py "$app/opt/meridian/goal_guidance.py"
 cp -r static "$app/opt/meridian/static"
 install -m 0644 assets/meridian.png "$app/usr/share/icons/hicolor/256x256/apps/meridian.png"
 cat > "$app/usr/bin/meridian" <<'LAUNCHER'
@@ -31,7 +32,7 @@ StartupNotify=true
 DESKTOP
 cat > "$app/DEBIAN/control" <<'CONTROL'
 Package: meridian
-Version: 0.2.14
+Version: 0.2.15
 Section: utils
 Priority: optional
 Architecture: all
@@ -48,7 +49,7 @@ cp -a "$app/opt" "$app/usr" "$work/rpmroot/"
 tar -C "$work/rpmroot" -czf "$rpmroot/SOURCES/meridian-root.tar.gz" .
 cat > "$rpmroot/SPECS/meridian.spec" <<'SPEC'
 Name: meridian
-Version: 0.2.14
+Version: 0.2.15
 Release: 1
 Summary: Local-first development control center
 License: Proprietary
@@ -76,7 +77,7 @@ cp -a opt usr %{buildroot}/
 /usr/share/icons/hicolor/256x256/apps/meridian.png
 
 %changelog
-* Thu Oct 29 2026 Meridian Project - 0.2.14-1
+* Thu Oct 29 2026 Meridian Project - 0.2.15-1
 - First Linux desktop package of the unified dashboard
 SPEC
 rpmbuild -bb --define "_topdir $rpmroot" "$rpmroot/SPECS/meridian.spec"

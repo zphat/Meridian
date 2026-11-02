@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
+	stdlog "log"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,11 +14,13 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
+	"github.com/jchv/go-webview2/webviewloader"
 )
 
 func message(s string) {
@@ -54,7 +58,7 @@ func approveDesktopLink(raw string) error {
 	return nil
 }
 
-const currentVersion = "0.2.14"
+const currentVersion = "0.2.15"
 const localURL = "http://127.0.0.1:8765/"
 
 func healthy() (string, bool) {
@@ -112,9 +116,48 @@ func applyNativeIcon(w webview2.WebView, icoFile string) error {
 
 // Returns true only when a browser fallback needs the local service to remain
 // running after the launcher exits.
-func presentNativeWindow(root string) bool {
+func presentNativeWindow(root string, startupLog io.Writer) bool {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	started := time.Now()
+	record := func(stage string) {
+		fmt.Fprintf(startupLog, "Native startup +%s: %s\n", time.Since(started).Round(time.Millisecond), stage)
+	}
+	ready, closed := make(chan struct{}), make(chan struct{})
+	created := make(chan webview2.WebView, 1)
+	var acknowledged sync.Once
+	defer close(closed)
+	go guardStartup(ready, closed, 8*time.Second, 25*time.Second, func() {
+		select {
+		case window := <-created:
+			record("page did not become ready; retrying navigation")
+			window.Dispatch(func() {
+				select {
+				case <-ready:
+					return
+				default:
+				}
+				window.SetSize(1280, 850, webview2.HintNone)
+				window.Navigate(localURL)
+			})
+		default:
+			record("waiting for WebView2 initialization")
+		}
+	}, func() {
+		record("native startup deadline reached; opening browser recovery")
+		if err := openBrowser(); err != nil {
+			message("Meridian could not open its window or your browser. Open " + localURL + " in your browser. Your data is safe.\n\n" + err.Error())
+		}
+		// Deliberately leave the healthy Python service alive for the browser.
+		// os.Exit also closes a stuck native window even if its COM creation
+		// never returned. Normal app closes still use the usual child cleanup.
+		os.Exit(0)
+	})
+	if version, err := webviewloader.GetInstalledVersion(); err == nil {
+		record("WebView2 runtime " + version)
+	} else {
+		record("could not query WebView2 runtime: " + err.Error())
+	}
 	// A native application model ID groups running windows with Meridian's
 	// own Start Menu shortcut, rather than Edge's taskbar identity.
 	appID, _ := syscall.UTF16PtrFromString("Meridian.Desktop")
@@ -129,11 +172,29 @@ func presentNativeWindow(root string) bool {
 		},
 	})
 	if w == nil {
-		message("The native Meridian window needs Microsoft Edge WebView2 Runtime. Opening the dashboard in your browser instead.")
-		_ = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", localURL).Start()
+		record("WebView2 could not initialize; opening browser recovery")
+		if err := openBrowser(); err != nil {
+			message("Open " + localURL + " in your browser to use Meridian.\n\n" + err.Error())
+		}
 		return true
 	}
 	defer w.Destroy()
+	record("controller initialized")
+	created <- w
+	_ = w.Bind("meridianNativeReady", func(view string, width, height int) {
+		if view == "loading" {
+			record("startup page painted; navigating to app")
+			w.Dispatch(func() { w.Navigate(localURL) })
+			return
+		}
+		if (view == "auth" || view == "dashboard") && width > 0 && height > 0 {
+			acknowledged.Do(func() {
+				record(fmt.Sprintf("interface ready (%s, %dx%d)", view, width, height))
+				close(ready)
+			})
+		}
+	})
+	w.Init(startupScript)
 	// WebView2 does not automatically forward target=_blank links to the
 	// default browser. Keep repositories and installer downloads usable.
 	_ = w.Bind("meridianOpenExternal", func(raw string) error {
@@ -157,9 +218,20 @@ func presentNativeWindow(root string) bool {
 	if err := applyNativeIcon(w, filepath.Join(root, "assets", "meridian-desktop-2026.ico")); err != nil {
 		message("Meridian's native window could not set its application icon: " + err.Error())
 	}
-	w.Navigate(localURL)
+	w.SetSize(1280, 850, webview2.HintNone)
+	w.SetHtml(startupHTML)
 	w.Run()
+	record("window closed")
 	return false
+}
+
+func openBrowser() error {
+	cmd := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", localURL)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 func main() {
@@ -219,6 +291,7 @@ func main() {
 		return
 	}
 	defer log.Close()
+	stdlog.SetOutput(log)
 	fmt.Fprintf(log, "\n--- Meridian native window %s ---\n", time.Now().Format(time.RFC3339))
 
 	var child *exec.Cmd
@@ -261,5 +334,5 @@ func main() {
 			return
 		}
 	}
-	keepService = presentNativeWindow(root)
+	keepService = presentNativeWindow(root, log)
 }

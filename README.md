@@ -1,4 +1,4 @@
-# Meridian 0.2.14
+# Meridian 0.2.15
 
 A local development dashboard for Latitude, Longitude and Sundial. Your goals, notes, decisions and email credentials stay on your computer.
 
@@ -6,9 +6,15 @@ A local development dashboard for Latitude, Longitude and Sundial. Your goals, n
 
 Download the Windows installer or Linux package from [GitHub Releases](https://github.com/zphat/Meridian/releases/latest). Windows installs per user and downloads a pinned, SHA-256-verified Python runtime on the first installation. The Windows installer is not code signed.
 
-Version 0.2.14 fixes the `Meridian.exe: Access is denied` upgrade failure. Setup prepares the new files, closes only this installation's native window and backend, waits for them to exit, and replaces the application. If replacement fails, the previous application files are restored. Notes, authentication settings and the database are outside the installation directory and are preserved. Running setup again repairs a partially completed earlier installation.
+Version 0.2.14 fixed the `Meridian.exe: Access is denied` upgrade failure. Setup prepares the new files, closes only this installation's native window and backend, waits for them to exit, and replaces the application. If replacement fails, the previous application files are restored. Notes, authentication settings and the database are outside the installation directory and are preserved. Running setup again repairs a partially completed earlier installation.
 
 The native WebView2 window, Start Menu link and desktop shortcut share the lime asterisk icon and `Meridian.Desktop` identity. A second launch focuses the existing window. External HTTPS links open in your default browser. Windows may keep a separately pinned old Edge shortcut; remove that obsolete pin and pin the new Meridian window if needed.
+
+## Windows startup recovery
+
+Version 0.2.15 waits for the native renderer to paint a small loading page before navigating to the app. Startup succeeds only after the styled sign-in screen or dashboard acknowledges readiness. A missing page is retried after eight seconds; if WebView2 still cannot initialize or load the interface within twenty-five seconds, Meridian opens its healthy local service in the default browser. Closing the app cancels recovery. The guard stops after startup and adds no idle polling or processes.
+
+Startup timings and recovery stages are recorded in `%LOCALAPPDATA%\Meridian\logs\startup.log`; no passwords or email codes are logged. Existing notes and email settings are preserved.
 
 ## Private access
 
@@ -34,6 +40,16 @@ The UI stops polling while hidden and checks every thirty seconds when visible, 
 
 Endpoint samples retain fourteen days; download snapshots retain ninety days; imported events are bounded. Personal notes and goals are not pruned. Settings shows local database size and service uptime. These policies limit background work and storage growth; total memory also includes the system WebView2 runtime.
 
+## Repair prompts and goal checks
+
+Each goal has **Repair prompt**, **Check again**, and **Details & evidence** actions. Prompts include the repository, latest collected release/build/site evidence, a task-specific investigation plan, acceptance checks and the results to report. You can review the prompt before copying it. They are prepared locally without an AI API or subscription.
+
+Use **Refresh & check** to refresh sources and check every goal, or check one project/goal. Results show **Verified**, **Still failing**, **Unable to verify**, or **Hands-on check**, with timestamps and source links. A passing selected check completes the goal automatically; a later failed check reopens a goal that Meridian completed. A network outage or missing evidence stays unknown. Goals you completed manually remain your decision.
+
+**Edit goal** selects the proof: a monitored endpoint, a named workflow passing on the current default-branch commit, or a hands-on checklist. The existing Sundial uptime goal checks both the live sync health endpoint and a successful scheduled monitor from the past 24 hours. Stale results, unrelated builds, cancelled jobs and skipped jobs cannot verify it. If frequent monitors fill GitHub's recent activity, Meridian separately retrieves push-triggered builds.
+
+Device recordings, usability, signatures and private backup restores still require their specific acceptance checks. Their detailed checklist is shown in **Details & evidence**; use **I tested it — mark done** after completing it. Verification rules and the latest evidence persist locally; editing acceptance criteria invalidates the previous check. Workspace backups preserve the rules and manual completion, but restored goals require fresh verification.
+
 ## Useful, measured analytics
 
 - Project and 7/30-day filters for observed download increases and imported visitor/pageview data.
@@ -57,6 +73,6 @@ node tests/metrics.test.cjs
 
 Browser tests use disposable data and mock email delivery. Install test-only Playwright with `npm install --no-save playwright@1.58.2`, run `npx playwright install chromium`, then `node tests/browser_smoke.cjs`.
 
-The Windows workflow builds and installs the app on Windows, tests file-lock rollback, shortcut and native icon identity, upgrades while the real native window is open, verifies notes/key preservation, leaves unrelated Python processes running, reopens the app and checks duplicate launch behavior. Linux packages are built and checked separately. Live Resend delivery with the owner's locally stored key requires verification on the owner's computer.
+The Windows workflow attaches Playwright to the installed app’s actual WebView2, checks five consecutive native launches, and injects one blank document to verify automatic recovery and the subsequent sign-in/dashboard flow. It also builds and installs the app on Windows, tests file-lock rollback, shortcut and native icon identity, upgrades while the real native window is open, verifies notes/key preservation, leaves unrelated Python processes running, reopens the app and checks duplicate launch behavior. Linux packages are built and checked separately. Live Resend delivery with the owner's locally stored key requires verification on the owner's computer.
 
 For remote use, place Meridian behind a properly configured private Tailscale connection. It binds to loopback by default; a trusted-host allowlist is not a substitute for authentication. Back up planning data from Settings.

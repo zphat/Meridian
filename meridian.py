@@ -28,10 +28,11 @@ from email.utils import parsedate_to_datetime
 # sys.path, unlike a normal Python installation. Explicitly load bundled auth.py.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import AuthManager, AuthError
+from goal_guidance import guidance, rule_for, evaluate as evaluate_goal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.14"
+VERSION = "0.2.15"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -41,7 +42,7 @@ TRUSTED_HOSTS = {x.strip().lower() for x in os.environ.get("MERIDIAN_TRUSTED_HOS
 PROJECTS = {
     "latitude": {"id": "latitude", "name": "Latitude", "repository": "zphat/Latitude", "kind": "Screen recorder & editor", "stage": "Cross-platform beta", "sites": [("Landing page", "https://latitude.pictures", "landing")], "description": "Record, stream, edit and export. Local-first and podcast-oriented."},
     "longitude": {"id": "longitude", "name": "Longitude", "repository": "zphat/Longitude", "kind": "Image & cover editor", "stage": "Early release", "sites": [("Landing page", "https://zphat.github.io/Longitude/", "landing"), ("Browser editor", "https://zphat.github.io/Longitude/app/", "app")], "description": "Lightweight local-first editor for thumbnails and covers."},
-    "sundial": {"id": "sundial", "name": "Sundial", "repository": "zphat/Sundial", "kind": "Planner & sync", "stage": "Public beta", "sites": [("Landing page", "https://sundial.services", "landing"), ("Web app", "https://app.sundial.services", "app"), ("Sync API", "https://sync.sundial.services/v1/health", "health")], "description": "Daily task planning with optional end-to-end encrypted sync."},
+    "sundial": {"id": "sundial", "name": "Sundial", "uptime_workflow_path": ".github/workflows/uptime.yml", "repository": "zphat/Sundial", "kind": "Planner & sync", "stage": "Public beta", "sites": [("Landing page", "https://sundial.services", "landing"), ("Web app", "https://app.sundial.services", "app"), ("Sync API", "https://sync.sundial.services/v1/health", "health")], "description": "Daily task planning with optional end-to-end encrypted sync."},
 }
 SEED_GOALS = [
     ("latitude", "Verify macOS recording, permissions and export on real hardware", "high", "Testing", "Hardware checks are not replaced by passing CI."),
@@ -96,6 +97,8 @@ class Meridian:
         self.lock = threading.RLock()
         self.busy = False
         self.last_sync_error = ""
+        self.verification_report = {"state":"idle"}
+        self._manual_worker = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self.started_at=time.time()
@@ -130,7 +133,12 @@ class Meridian:
             CREATE INDEX IF NOT EXISTS site_time ON site_samples(project,url,checked_at);
             CREATE INDEX IF NOT EXISTS download_asset_time ON downloads(project,release_tag,asset,counted_at);
             CREATE INDEX IF NOT EXISTS event_time ON events(happened_at);
+            CREATE TABLE IF NOT EXISTS goal_checks (goal_id INTEGER PRIMARY KEY, json TEXT NOT NULL);
             """)
+            goal_columns={row[1] for row in self.conn.execute('PRAGMA table_info(goals)')}
+            for column in ('verification_kind','verification_target','completion_source'):
+                if column not in goal_columns:
+                    self.conn.execute(f"ALTER TABLE goals ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             if not self.conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]:
                 now=iso_now()
                 self.conn.executemany("INSERT INTO goals(project,title,priority,category,description,state,created_at,updated_at) VALUES(?,?,?,?,?,'todo',?,?)", [(*r,now,now) for r in SEED_GOALS])
@@ -202,8 +210,9 @@ class Meridian:
             for kind,key,title,detail,link,when in events:
                 self.conn.execute("INSERT OR IGNORE INTO events(project,kind,external_id,title,detail,link,happened_at) VALUES(?,?,?,?,?,?,?)",(p,kind,str(key),title[:350],detail[:800],link[:600],when or iso_now()))
 
-    def github_sync(self):
+    def github_sync(self, project_id=None):
         for p,config in PROJECTS.items():
+            if project_id and p != project_id:continue
             if self._stop.is_set():break
             name=config["repository"]
             try:
@@ -216,8 +225,14 @@ class Meridian:
                 runs=workflows.get("workflow_runs",[])
                 is_monitor=lambda r:bool(re.search(r'\b(uptime|health|monitor)\b',r.get('name',''),re.I))
                 builds=[r for r in runs if not is_monitor(r) and r.get('head_branch',repo.get('default_branch'))==repo.get('default_branch')]
+                # Frequent uptime runs can fill the entire recent-run page.
+                # One filtered query keeps real build evidence discoverable.
+                if not builds:
+                    branch=urllib.parse.quote(repo.get('default_branch') or 'main',safe='')
+                    pushed=self._github_get('/repos/'+name+'/actions/runs?event=push&branch='+branch+'&per_page=50')
+                    builds=[r for r in pushed.get('workflow_runs',[]) if not is_monitor(r) and r.get('head_branch')==repo.get('default_branch')]
                 ci=next(iter(builds),None)
-                uptime=next((r for r in runs if is_monitor(r)),None)
+                uptime=next((r for r in runs if (r.get('path')==config['uptime_workflow_path'] if config.get('uptime_workflow_path') else is_monitor(r)) and r.get('head_branch')==repo.get('default_branch')),None)
                 relevant_releases=[{"tag_name":r.get("tag_name"),"name":r.get("name"),"published_at":r.get("published_at"),"html_url":r.get("html_url"),"prerelease":r.get("prerelease",False),"assets":[{"name":a.get("name"),"download_count":a.get("download_count",0)} for a in r.get("assets",[])]} for r in releases]
                 obj={"repo":{"full_name":name,"description":repo.get("description"),"pushed_at":repo.get("pushed_at"),"open_issues_count":repo.get("open_issues_count"),"default_branch":repo.get("default_branch")},"release":relevant_releases[0] if relevant_releases else None,"releases":relevant_releases,"ci":({k:ci.get(k) for k in ("name","status","conclusion","html_url","created_at")} if ci else None),"uptime_workflow":({k:uptime.get(k) for k in ("name","status","conclusion","html_url","created_at")} if uptime else None),"commits":[{"sha":c.get("sha"),"message":c.get("commit",{}).get("message","").split("\n")[0],"date":c.get("commit",{}).get("committer",{}).get("date"),"url":c.get("html_url")} for c in commits],"issues":[{"number":i.get("number"),"title":i.get("title"),"url":i.get("html_url"),"pull_request":bool(i.get("pull_request"))} for i in issues],"roadmap":self._roadmap(name,repo.get("default_branch") or "main"),"fetched_at":iso_now()}
                 # A sample of recent default-branch runs, separate from the
@@ -225,6 +240,15 @@ class Meridian:
                 completed=[r for r in builds if r.get('conclusion') in ('success','failure','timed_out','action_required')]
                 obj['build_stats']={'sampled':len(completed),'passed':sum(r.get('conclusion')=='success' for r in completed),
                     'pending':sum(r.get('status')!='completed' for r in builds),'latest_runs':len(builds)}
+                fields=('workflow_id','name','status','conclusion','html_url','created_at','updated_at','head_sha')
+                latest_workflows={}
+                for run in builds:
+                    key=str(run.get('workflow_id',''))
+                    if key and key not in latest_workflows:latest_workflows[key]={k:run.get(k) for k in fields}
+                obj['workflows']=list(latest_workflows.values())
+                obj['head_sha']=commits[0].get('sha') if commits else None
+                obj['ci']={k:ci.get(k) for k in fields} if ci else None
+                obj['uptime_workflow']={k:uptime.get(k) for k in fields} if uptime else None
                 self._cache("github:"+p,obj)
                 events=[]
                 for r in releases[:4]:
@@ -278,8 +302,9 @@ class Meridian:
                 pass  # A failed expiry lookup is unknown, not proof of bad TLS.
         return result
 
-    def site_sync(self):
+    def site_sync(self, project_id=None):
         for p,config in PROJECTS.items():
+            if project_id and p != project_id:continue
             for label,url,typ in config["sites"]:
                 if self._stop.is_set():return
                 d=self.check_url(url,typ=="health")
@@ -289,22 +314,64 @@ class Meridian:
                     self.conn.execute("DELETE FROM site_samples WHERE checked_at<?",(cutoff,))
                     self.conn.execute("DELETE FROM site_samples WHERE id IN (SELECT id FROM site_samples WHERE project=? AND url=? ORDER BY id DESC LIMIT -1 OFFSET 5000)",(p,url))
 
-    def run_sync(self,kind="all"):
-        with self.lock:
-            if self.busy:return False
-            self.busy=True
+    def run_sync(self,kind="all",project_id=None,verify=False,goal_id=None,_reserved=False):
+        if not _reserved:
+            with self.lock:
+                if self.busy:return False
+                self.busy=True
+        since=iso_now()
         try:
-            if kind in ("all","github"):self.github_sync()
-            if kind in ("all","sites"):self.site_sync()
+            if kind in ("all","github"):
+                self.github_sync(project_id) if project_id else self.github_sync()
+            if kind in ("all","sites"):
+                self.site_sync(project_id) if project_id else self.site_sync()
+            if verify:self.verify_goals(since,goal_id,project_id)
             return True
+        except Exception:
+            if verify:
+                with self.lock:self.verification_report={"state":"error","finished_at":iso_now(),"summary":"Checks could not finish. Try again when the sources are available."}
+            return False
         finally:
-            self.busy=False
+            with self.lock:self.busy=False
 
-    def refresh_async(self,kind="all"):
+    def refresh_async(self,kind="all",verify=False,goal_id=None,project_id=None):
+        if kind not in ('all','github','sites'):raise ValueError('Invalid refresh type')
+        if project_id is not None and project_id not in PROJECTS:raise ValueError('Invalid project')
         with self.lock:
             if self.busy:return False
-        threading.Thread(target=self.run_sync,args=(kind,),name="ManualRefresh",daemon=True).start()
+            if goal_id is not None:
+                row=self.conn.execute('SELECT project FROM goals WHERE id=?',(goal_id,)).fetchone()
+                if not row:raise ValueError('Goal not found')
+                project_id=row['project']
+            self.busy=True  # Reserve before starting the worker, avoiding duplicate refreshes.
+            if verify:self.verification_report={"state":"running","started_at":iso_now(),"goal_id":goal_id,"project":project_id}
+            self._manual_worker=threading.Thread(target=self.run_sync,args=(kind,project_id,verify,goal_id,True),name="ManualRefresh",daemon=True)
+            self._manual_worker.start()
         return True
+
+    def verify_goals(self,since,goal_id=None,project_id=None):
+        with self.lock,self.conn:
+            snapshot=self.snapshot()
+            projects={p['id']:p for p in snapshot['projects']}
+            counts={k:0 for k in ('verified','failed','blocked','manual')}
+            completed=reopened=0
+            for goal in snapshot['goals']:
+                if goal_id is not None and goal['id']!=goal_id:continue
+                if project_id and goal['project']!=project_id:continue
+                result=evaluate_goal(goal,projects[goal['project']],since,iso_now())
+                old=goal.get('check') or {}
+                result['previous_state']=old.get('state')
+                counts[result['state']]+=1
+                now=iso_now()
+                if result['state']=='verified' and goal['state']!='done':
+                    self.conn.execute("UPDATE goals SET state='done',completion_source='verified',completed_at=?,updated_at=? WHERE id=?",(now,now,goal['id']))
+                    completed+=1
+                elif result['state']=='failed' and goal['state']=='done' and goal.get('completion_source')=='verified':
+                    self.conn.execute("UPDATE goals SET state='todo',completion_source='',completed_at=NULL,updated_at=? WHERE id=?",(now,goal['id']))
+                    reopened+=1
+                    result['summary']='Reopened: '+result['summary']
+                self.conn.execute('INSERT OR REPLACE INTO goal_checks(goal_id,json) VALUES(?,?)',(goal['id'],json.dumps(result)))
+            self.verification_report={"state":"complete","finished_at":iso_now(),"counts":counts,"completed":completed,"reopened":reopened,"goal_id":goal_id,"project":project_id}
 
     def check_updates(self):
         """Read release metadata only; never download or run code without approval."""
@@ -411,7 +478,7 @@ class Meridian:
 
     def state_revision(self):
         with self.lock:
-            return '"'+str(self.started_at)+':'+str(self.conn.total_changes)+':'+str(self.busy)+':'+str(self._update_busy)+':'+str(self.update_state.get('checked_at'))+':'+str(int(time.time()//60))+'"'
+            return '"'+str(self.started_at)+':'+str(self.conn.total_changes)+':'+str(self.busy)+':'+str(self._update_busy)+':'+str(self.update_state.get('checked_at'))+':'+str(self.verification_report.get('finished_at'))+':'+str(int(time.time()//60))+'"'
 
     def _loop(self):
         # Wait until the next job is due; avoid waking every five seconds.
@@ -439,6 +506,11 @@ class Meridian:
         with self.lock:
             cache={r["key"]:{"data":read_json(r["json"],{}),"checked_at":r["checked_at"],"error":r["error"]} for r in self.conn.execute("SELECT * FROM cache")}
             goals=self._get("SELECT * FROM goals ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,id DESC")
+            checks={row['goal_id']:read_json(row['json'],{}) for row in self.conn.execute('SELECT * FROM goal_checks')}
+            for goal in goals:
+                goal['rule']=rule_for(goal)
+                goal['guidance']=guidance(goal)
+                goal['check']=checks.get(goal['id'])
             notes=self._get("SELECT * FROM notes ORDER BY id DESC LIMIT 250")
             decisions=self._get("SELECT * FROM decisions ORDER BY id DESC LIMIT 250")
             events=self._get("SELECT * FROM events ORDER BY happened_at DESC,id DESC LIMIT 170")
@@ -475,11 +547,11 @@ class Meridian:
                 release=gh["data"].get("release") or {}
                 obj["latest_downloads"]=sum(int(a.get("total",0)) for a in dl if a["project"]==p and a["release_tag"]==release.get("tag_name", ""))
                 project_details.append(obj)
-            return {"projects":project_details,"goals":goals,"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
+            return {"projects":project_details,"goals":goals,"verification_report":dict(self.verification_report),"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
                 "runtime":{"uptime_seconds":int(time.time()-self.started_at),'database_bytes':sum(p.stat().st_size for p in self.data_dir.glob('meridian.sqlite3*') if p.is_file()),'probe_retention_days':14,'download_retention_days':90}}
 
     def insert(self,table,data):
-        cols={"goals":{"project","title","priority","category","description","state"},"notes":{"project","title","body"},"decisions":{"project","title","reason"}}[table]
+        cols={"goals":{"project","title","priority","category","description","state","verification_kind","verification_target"},"notes":{"project","title","body"},"decisions":{"project","title","reason"}}[table]
         allowed={k:v for k,v in data.items() if k in cols}
         if allowed.get("project") not in PROJECTS:raise ValueError("Choose a valid project")
         if not str(allowed.get("title","")).strip():raise ValueError("Title is required")
@@ -488,24 +560,44 @@ class Meridian:
         if table=="goals":
             if allowed.get("state","todo") not in ("todo","doing","done"):raise ValueError("Invalid state")
             if allowed.get("priority","medium") not in ("critical","high","medium","low"):raise ValueError("Invalid priority")
+            self.validate_goal_rule(allowed)
         now=iso_now();allowed["created_at"]=now
-        if table=="goals":allowed["updated_at"]=now
+        if table=="goals":
+            allowed["updated_at"]=now
+            if allowed.get('state')=='done':allowed.update(completed_at=now,completion_source='manual')
         names=",".join(allowed); marks=",".join("?" for _ in allowed)
         with self.lock,self.conn:
             cur=self.conn.execute(f"INSERT INTO {table} ({names}) VALUES ({marks})",list(allowed.values()))
             return cur.lastrowid
 
+    def validate_goal_rule(self,goal):
+        rule=rule_for(goal)
+        if rule['kind'] not in ('manual','site','build','uptime'):raise ValueError('Choose a supported verification method')
+        if rule['kind']=='site' and rule['target'] not in [s[1] for s in PROJECTS[goal['project']]['sites']]:raise ValueError('Choose a monitored endpoint')
+        if rule['kind']=='build' and not re.fullmatch(r'[0-9]{1,16}',rule['target']):raise ValueError('Choose a GitHub workflow; refresh GitHub first if the list is empty')
+        if rule['kind']=='uptime' and not any(s[2]=='health' for s in PROJECTS[goal['project']]['sites']):raise ValueError('This project has no monitored health endpoint')
+
     def change_goal(self,id,data):
-        allowed={k:v for k,v in data.items() if k in ("state","title","description","category","priority")}
+        allowed={k:v for k,v in data.items() if k in ("state","title","description","category","priority","verification_kind","verification_target")}
         if not allowed:raise ValueError("No values supplied")
         if "state" in allowed and allowed["state"] not in ("todo","doing","done"):raise ValueError("Invalid state")
         if "priority" in allowed and allowed["priority"] not in ("critical","high","medium","low"):raise ValueError("Invalid priority")
         for v in allowed.values():
             if not isinstance(v,str) or len(v)>12000:raise ValueError("Invalid value")
-        allowed["updated_at"]=iso_now()
-        if allowed.get("state")=="done":allowed["completed_at"]=iso_now()
-        elif "state" in allowed:allowed["completed_at"]=None
         with self.lock,self.conn:
+            old=self.conn.execute('SELECT * FROM goals WHERE id=?',(id,)).fetchone()
+            if not old:raise ValueError('Goal not found')
+            merged={**dict(old),**allowed}
+            self.validate_goal_rule(merged)
+            if not merged['title'].strip():raise ValueError('Title is required')
+            allowed["updated_at"]=iso_now()
+            changed=any(k in allowed and allowed[k]!=old[k] for k in ('title','description','verification_kind','verification_target'))
+            if changed:
+                self.conn.execute('DELETE FROM goal_checks WHERE goal_id=?',(id,))
+                if old['completion_source']=='verified':allowed.update(state='todo',completed_at=None,completion_source='')
+            if 'state' in allowed and allowed['state']!=old['state']:
+                allowed['completion_source']='manual' if allowed['state']=='done' else ''
+                allowed['completed_at']=iso_now() if allowed['state']=='done' else None
             cur=self.conn.execute("UPDATE goals SET "+",".join(k+"=?" for k in allowed)+" WHERE id=?",(*allowed.values(),id))
             if not cur.rowcount:raise ValueError("Goal not found")
 
@@ -513,6 +605,7 @@ class Meridian:
         if table not in ("goals","notes","decisions"):raise ValueError("Invalid item")
         with self.lock,self.conn:
             self.conn.execute(f"DELETE FROM {table} WHERE id=?",(id,))
+            if table=='goals':self.conn.execute('DELETE FROM goal_checks WHERE goal_id=?',(id,))
 
     def import_csv(self,text,project):
         if project not in PROJECTS:raise ValueError("Invalid project")
@@ -549,11 +642,16 @@ class Meridian:
             if not isinstance(data.get(table),list) or len(data[table])>20000:raise ValueError("Invalid backup data")
         # Clear and reinsert owned private content; automated data isn't touched.
         with self.lock,self.conn:
+            self.conn.execute('DELETE FROM goal_checks')
             for table in ("goals","notes","decisions","web_analytics"):
                 self.conn.execute("DELETE FROM "+table)
-                cols={"goals":("project","title","priority","category","description","state","created_at","updated_at","completed_at"),"notes":("project","title","body","created_at"),"decisions":("project","title","reason","created_at"),"web_analytics":("project","date","visitors","pageviews")}[table]
+                cols={"goals":("project","title","priority","category","description","state","created_at","updated_at","completed_at","verification_kind","verification_target","completion_source"),"notes":("project","title","body","created_at"),"decisions":("project","title","reason","created_at"),"web_analytics":("project","date","visitors","pageviews")}[table]
                 for row in data[table]:
                     if not isinstance(row,dict) or row.get("project") not in PROJECTS:raise ValueError("Invalid backup project")
+                    if table=='goals':
+                        row={**row,'verification_kind':row.get('verification_kind') or '', 'verification_target':row.get('verification_target') or '',
+                             'completion_source':'manual' if row.get('state')=='done' else ''}
+                        self.validate_goal_rule(row)
                     values=[row.get(k) for k in cols]
                     self.conn.execute(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",values)
 
@@ -561,10 +659,11 @@ class Meridian:
         self._stop.set()
         self._wake.set()
         if self.worker:self.worker.join(timeout=20)
+        if self._manual_worker:self._manual_worker.join(timeout=20)
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.14"
+    server_version="Meridian/0.2.15"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -727,7 +826,11 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/settings/monitoring' and method=='POST':
                 self.app.set_monitor_mode(body.get('mode'))
                 return self.reply({'ok':True})
-            if path=="/api/refresh" and method=="POST":return self.reply({"started":self.app.refresh_async(body.get("kind","all"))})
+            if path=="/api/refresh" and method=="POST":return self.reply({"started":self.app.refresh_async(body.get("kind","all"),verify=True)})
+            if path=="/api/goals/check" and method=="POST":
+                goal_id=body.get('goal_id')
+                if goal_id is not None and (type(goal_id) is not int or goal_id<1):raise ValueError('Invalid goal')
+                return self.reply({"started":self.app.refresh_async('all',verify=True,goal_id=goal_id,project_id=body.get('project'))})
             if path=="/api/updates/check" and method=="POST":return self.reply({"started":self.app.check_updates_async()})
             if path=="/api/analytics/import" and method=="POST":return self.reply({"imported":self.app.import_csv(body.get("csv",""),body.get("project",""))})
             if path=="/api/restore" and method=="POST":
