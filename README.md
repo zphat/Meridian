@@ -1,4 +1,4 @@
-# Meridian 0.2.16
+# Meridian 0.2.17
 
 A local development dashboard for Latitude, Longitude and Sundial. Your goals, notes, decisions and email credentials stay on your computer.
 
@@ -57,6 +57,21 @@ Use **Refresh & check** to refresh sources and check every goal, or check one pr
 **Edit goal** selects the proof: a monitored endpoint, a named workflow passing on the current default-branch commit, or a hands-on checklist. The existing Sundial uptime goal checks both the live sync health endpoint and a successful scheduled monitor from the past 24 hours. Stale results, unrelated builds, cancelled jobs and skipped jobs cannot verify it. If frequent monitors fill GitHub's recent activity, Meridian separately retrieves push-triggered builds.
 
 Device recordings, usability, signatures and private backup restores still require their specific acceptance checks. Their detailed checklist is shown in **Details & evidence**; use **I tested it — mark done** after completing it. Verification rules and the latest evidence persist locally; editing acceptance criteria invalidates the previous check. Workspace backups preserve the rules and manual completion, but restored goals require fresh verification.
+
+## Ranked suggestions
+
+**Suggestions** ranks new work across projects. Each project also has a Suggestions tab, and the overview previews the top three new proposals. Suggestions refresh with existing monitoring or **Refresh suggestions**; they never silently become goals.
+
+- Current-commit failed builds, recent endpoint/health-monitor failures and approaching certificate expiry supply observed signals. Rate-limit errors, old build failures, cancelled/skipped runs and stale sources do not become new bug reports.
+- Open issues use explicit priority/severity labels; pull requests are excluded. Unchecked roadmap items support optional `[critical]`, `[high]`, `[medium]` or `[low]` prefixes. Reports and plans are labelled separately from observed failures.
+- Recent pushes with relevant commit messages produce one focused regression-review suggestion per project. These are review hints, not code audits or proof that a feature shipped. Inspect the diff and the actual artifact first.
+- Repository-authored `MERIDIAN_GOALS.json` carries specific findings from an update: stable IDs, priority, reason, investigation steps and acceptance checks. The small optional file is pinned to the observed commit and cached across restarts. Missing files are normal. See [the follow-up format](docs/suggestions.md) and [example](docs/MERIDIAN_GOALS.example.json).
+
+Open **Evidence & suggested plan**, copy the repair prompt, then choose **Add to goals**. Build/site/uptime proposals attach the matching verification rule; issue, roadmap, update-review and certificate proposals retain an honest hands-on checklist. Existing matching goals are linked instead of duplicated. If another push changes an active suggestion’s context, **Update goal plan** applies the new checklist while preserving your notes and progress. Completed work stays quiet until a new incident, new push, or explicitly revised follow-up warrants review; reopening requires a click.
+
+**Snooze 24h** and **Dismiss** move proposals to **Later**, where **Bring back** restores them. **In goals** shows linked work. **History** includes completed or no-longer-current signals; disappearing from a feed does not prove completion. Source failures preserve previous suggestions with **Refresh needed**, disabling adoption until evidence is current. Decisions and custom plans survive restart, upgrades and workspace backups.
+
+Suggestions use local rules, not an AI model. They add no runtime dependency or background process, and do not increase REST API polling frequency. GitHub evidence older than three hours and site samples older than 45 minutes need a refresh. There is no webhook listener; updates are noticed at the next normal or manual refresh. Existing monitor modes and token request budgets still apply.
 
 ## Daily completions and history
 

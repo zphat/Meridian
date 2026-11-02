@@ -1,5 +1,6 @@
 """Small, offline goal plans and conservative verification of collected evidence."""
 import datetime as dt
+import json
 
 UPTIME_GOAL = 'Diagnose repeated sync-server uptime-check failures'
 
@@ -87,6 +88,11 @@ PLANS = {
 
 
 def guidance(goal):
+    try:
+        custom=json.loads(goal.get('guidance_json') or '{}')
+        if all(isinstance(custom.get(k),list) and 1<=len(custom[k])<=8 and all(isinstance(v,str) and 0<len(v)<=1600 for v in custom[k]) for k in ('approach','acceptance')):
+            return {k:custom[k] for k in ('approach','acceptance')}
+    except (ValueError,TypeError,AttributeError):pass
     approach, acceptance = PLANS.get(goal['title'], (
         ['Inspect the current repository, related issues and the exact behavior described in this goal before changing files.',
          'Record expected versus actual behavior, the affected version/environment and a minimal reproduction.',

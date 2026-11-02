@@ -30,10 +30,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import AuthManager, AuthError
 from goal_guidance import guidance, rule_for, evaluate as evaluate_goal
 from github_access import GitHubAccess, GitHubError, stamp as github_stamp
+from suggestions import SuggestionStore, parse_followups, PRIORITIES
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.2.16"
+VERSION = "0.2.17"
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC = ROOT / "static"
 DEFAULT_DATA = Path(os.environ.get("MERIDIAN_DATA_DIR", str(Path.home() / ".meridian"))).expanduser()
@@ -109,7 +110,9 @@ class Meridian:
         self.tray_icon = None  # Windows packaged build can issue a system notification.
         self._initialize()
         self.github_access=GitHubAccess(self.data_dir,self.conn,self.lock,UA)
+        self.suggestions=SuggestionStore(self.conn,self.lock)
         self.auth = AuthManager(self.data_dir, self.conn, self.lock)
+        self.refresh_suggestions()
         if start_worker:
             self.worker = threading.Thread(target=self._loop, name="MeridianMonitor", daemon=True)
             self.worker.start()
@@ -136,7 +139,7 @@ class Meridian:
             CREATE TABLE IF NOT EXISTS goal_checks (goal_id INTEGER PRIMARY KEY, json TEXT NOT NULL);
             """)
             goal_columns={row[1] for row in self.conn.execute('PRAGMA table_info(goals)')}
-            for column in ('verification_kind','verification_target','completion_source'):
+            for column in ('verification_kind','verification_target','completion_source','suggestion_key','suggestion_revision','guidance_json'):
                 if column not in goal_columns:
                     self.conn.execute(f"ALTER TABLE goals ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             if not self.conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]:
@@ -169,6 +172,7 @@ class Meridian:
 
     def _roadmap(self, repo, branch):
         """Fetch human-authored roadmap text when present; don't invent status."""
+        failed=False
         for path in ("PROJECT_STATUS.md", "docs/ROADMAP.md"):
             url=f"https://raw.githubusercontent.com/{repo}/{urllib.parse.quote(branch)}/{path}"
             try:
@@ -180,10 +184,38 @@ class Meridian:
                     for line in body.splitlines():
                         match=re.match(r"^\s*[-*]\s*\[ \]\s+(.+)$",line)
                         if match:lines.append(match.group(1).strip()[:300])
-                    return {"url":url,"text":body[:20000],"open_items":lines[:50],"file":path}
-            except (urllib.error.HTTPError,urllib.error.URLError,TimeoutError):
+                    return {"url":url,"text":body[:20000],"open_items":lines[:50],"file":path,"status":"ok","checked_at":iso_now()}
+            except urllib.error.HTTPError as error:
+                failed=failed or error.code!=404
                 continue
-        return None
+            except (urllib.error.URLError,TimeoutError,OSError):
+                failed=True
+                continue
+        return {"status":"error" if failed else "missing","open_items":[],"checked_at":iso_now()}
+
+    def _followups(self,repo,revision):
+        # One small, pinned document per observed commit. It does not spend the
+        # REST API allowance and is reused across refreshes and app restarts.
+        key='followups:'+repo
+        cached=self._get('SELECT * FROM cache WHERE key=?',(key,))
+        if cached:
+            old=read_json(cached[0]['json'],{})
+            if old.get('revision')==revision and old.get('status') in ('ok','missing','invalid'):
+                return old
+            # Transient failures retry with the ordinary GitHub refresh, never a new timer.
+        url=f'https://raw.githubusercontent.com/{repo}/{urllib.parse.quote(revision,safe="")}/MERIDIAN_GOALS.json'
+        result={'revision':revision,'url':url,'checked_at':iso_now(),'items':[]}
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':UA}),timeout=6) as response:
+                body=response.read(65537)
+            if len(body)>65536:raise ValueError('Follow-up document exceeds 64 KB')
+            result.update(status='ok',items=parse_followups(body.decode('utf-8')))
+        except urllib.error.HTTPError as error:
+            result.update(status='missing' if error.code==404 else 'error')
+        except (ValueError,UnicodeError):result.update(status='invalid')
+        except (urllib.error.URLError,TimeoutError,OSError):result.update(status='error')
+        self._cache(key,result)
+        return result
 
     def _store_events(self,p,events):
         with self.lock,self.conn:
@@ -220,7 +252,10 @@ class Meridian:
                 ci=next(iter(builds),None)
                 uptime=next((r for r in runs if (r.get('path')==config['uptime_workflow_path'] if config.get('uptime_workflow_path') else is_monitor(r)) and r.get('head_branch')==repo.get('default_branch')),None)
                 relevant_releases=[{"tag_name":r.get("tag_name"),"name":r.get("name"),"published_at":r.get("published_at"),"html_url":r.get("html_url"),"prerelease":r.get("prerelease",False),"assets":[{"name":a.get("name"),"download_count":a.get("download_count",0)} for a in r.get("assets",[])]} for r in releases]
-                obj={"repo":{"full_name":name,"description":repo.get("description"),"pushed_at":repo.get("pushed_at"),"open_issues_count":repo.get("open_issues_count"),"default_branch":repo.get("default_branch")},"release":relevant_releases[0] if relevant_releases else None,"releases":relevant_releases,"ci":({k:ci.get(k) for k in ("name","status","conclusion","html_url","created_at")} if ci else None),"uptime_workflow":({k:uptime.get(k) for k in ("name","status","conclusion","html_url","created_at")} if uptime else None),"commits":[{"sha":c.get("sha"),"message":c.get("commit",{}).get("message","").split("\n")[0],"date":c.get("commit",{}).get("committer",{}).get("date"),"url":c.get("html_url")} for c in commits],"issues":[{"number":i.get("number"),"title":i.get("title"),"url":i.get("html_url"),"pull_request":bool(i.get("pull_request"))} for i in issues],"roadmap":self._roadmap(name,repo.get("default_branch") or "main"),"fetched_at":iso_now()}
+                revision=commits[0].get('sha') if commits else repo.get('default_branch') or 'main'
+                obj={"repo":{"full_name":name,"description":repo.get("description"),"pushed_at":repo.get("pushed_at"),"open_issues_count":repo.get("open_issues_count"),"default_branch":repo.get("default_branch")},"release":relevant_releases[0] if relevant_releases else None,"releases":relevant_releases,"ci":({k:ci.get(k) for k in ("name","status","conclusion","html_url","created_at")} if ci else None),"uptime_workflow":({k:uptime.get(k) for k in ("name","status","conclusion","html_url","created_at")} if uptime else None),"commits":[{"sha":c.get("sha"),"message":c.get("commit",{}).get("message","").split("\n")[0],"date":c.get("commit",{}).get("committer",{}).get("date"),"url":c.get("html_url")} for c in commits],"issues":[{"number":i.get("number"),"title":i.get("title"),"url":i.get("html_url"),"pull_request":bool(i.get("pull_request")),"labels":[str(label.get('name','') if isinstance(label,dict) else label)[:100] for label in i.get('labels',[])][:20],"body":str(i.get('body') or '')[:1600]} for i in issues],"roadmap":self._roadmap(name,revision),"followups":self._followups(name,revision),"fetched_at":iso_now()}
+                issue_stamp=self.github_access.validated_at('/repos/'+name+'/issues?state=open&per_page=40')
+                obj['issues_checked_at']=github_stamp(issue_stamp) if issue_stamp else iso_now()
                 # A sample of recent default-branch runs, separate from the
                 # current build status. Cancelled/skipped runs are not failures.
                 completed=[r for r in builds if r.get('conclusion') in ('success','failure','timed_out','action_required')]
@@ -320,6 +355,7 @@ class Meridian:
             if kind in ("all","sites"):
                 self.site_sync(project_id) if project_id else self.site_sync()
             if verify:self.verify_goals(since,goal_id,project_id)
+            self.refresh_suggestions()
             return True
         except Exception:
             if verify:
@@ -494,7 +530,47 @@ class Meridian:
             due=[next_updates] if mode=='paused' else [next_gh,next_sites,next_updates]
             self._wake.wait(max(1,min(due)-time.monotonic()))
 
-    def snapshot(self):
+    def refresh_suggestions(self):
+        state=self.snapshot(include_suggestions=False)
+        self.suggestions.refresh(state['projects'],dt.datetime.now(dt.timezone.utc))
+
+    def suggestion_action(self,key,action,revision):
+        if not isinstance(key,str) or len(key)>300:raise ValueError('Invalid suggestion')
+        with self.lock,self.conn:
+            state=self.snapshot()
+            candidate=next((c for c in state['suggestions'] if c['key']==key),None)
+            if not candidate:raise ValueError('Suggestion not found')
+            if candidate['revision']!=revision:raise ValueError('This suggestion changed. Refresh and review its latest evidence.')
+            if action not in ('add','update'):
+                self.suggestions.decide(key,action,dt.datetime.now(dt.timezone.utc))
+                return {'ok':True}
+            if not candidate['fresh'] or candidate['state']=='inactive':raise ValueError('Refresh first so this suggestion has current evidence.')
+            goal=next((g for g in state['goals'] if g['id']==candidate['goal_id']),None)
+            if action=='update' and (not goal or goal['state']=='done' or goal.get('suggestion_key')!=key):
+                raise ValueError('Only an existing active suggestion goal can receive an updated plan.')
+            if action=='update' and not candidate['goal_changed']:
+                return {'ok':True,'goal_id':goal['id'],'existing':True}
+            if action=='add' and goal and (goal['state']!='done' or candidate['state']=='completed'):
+                return {'ok':True,'goal_id':goal['id'],'existing':True}
+            description=candidate['reason']+'\n\nSources:\n'+'\n'.join(x['label']+': '+x['url'] for x in candidate['sources'])
+            fields={'project':candidate['project'],'title':candidate['title'],'priority':candidate['priority'],
+                    'category':'Suggested · '+candidate['kind'],'description':description,
+                    'verification_kind':candidate['verification_kind'],'verification_target':candidate['verification_target']}
+            self.validate_goal_rule(fields)
+            if goal:
+                # Reopening is an explicit click. Keep the user's original wording and notes.
+                goal_id=goal['id']
+                priority=max((goal['priority'],candidate['priority']),key=lambda v:PRIORITIES[v])
+                self.conn.execute("UPDATE goals SET state=?,completed_at=NULL,completion_source='',updated_at=?,priority=?,description=? WHERE id=?",
+                    (goal['state'] if action=='update' else 'todo',iso_now(),priority,(goal['description']+'\n\nNew follow-up:\n'+description)[:12000],goal_id))
+                self.conn.execute('DELETE FROM goal_checks WHERE goal_id=?',(goal_id,))
+            else:goal_id=self.insert('goals',fields)
+            self.conn.execute('UPDATE goals SET suggestion_key=?,suggestion_revision=?,guidance_json=? WHERE id=?',
+                (key,candidate['revision'],json.dumps(candidate['guidance']),goal_id))
+            self.suggestions.decide(key,'restore',dt.datetime.now(dt.timezone.utc))
+            return {'ok':True,'goal_id':goal_id,'reopened':bool(goal and action=='add'),'updated':action=='update'}
+
+    def snapshot(self,include_suggestions=True):
         with self.lock:
             cache={r["key"]:{"data":read_json(r["json"],{}),"checked_at":r["checked_at"],"error":r["error"]} for r in self.conn.execute("SELECT * FROM cache")}
             goals=self._get("SELECT * FROM goals ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,id DESC")
@@ -539,7 +615,8 @@ class Meridian:
                 release=gh["data"].get("release") or {}
                 obj["latest_downloads"]=sum(int(a.get("total",0)) for a in dl if a["project"]==p and a["release_tag"]==release.get("tag_name", ""))
                 project_details.append(obj)
-            return {"projects":project_details,"goals":goals,"github_access":self.github_access.status(),"verification_report":dict(self.verification_report),"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
+            proposals=self.suggestions.view(project_details,goals,dt.datetime.now(dt.timezone.utc)) if include_suggestions else []
+            return {"projects":project_details,"goals":goals,"suggestions":proposals,"github_access":self.github_access.status(),"verification_report":dict(self.verification_report),"notes":notes,"decisions":decisions,"events":events,"web_analytics":analytics,"download_assets":dl,"download_history":dl_series,"site_history":site_series,"site_48h":site_48h,"site_metrics":site_metrics,"settings":self._settings(),"busy":self.busy,"data_dir":str(self.data_dir),"time":iso_now(),"app_version":VERSION,"mode":"local","updates":dict(self.update_state),
                 "runtime":{"uptime_seconds":int(time.time()-self.started_at),'database_bytes':sum(p.stat().st_size for p in self.data_dir.glob('meridian.sqlite3*') if p.is_file()),'probe_retention_days':14,'download_retention_days':90}}
 
     def insert(self,table,data):
@@ -585,6 +662,7 @@ class Meridian:
             allowed["updated_at"]=iso_now()
             changed=any(k in allowed and allowed[k]!=old[k] for k in ('title','description','verification_kind','verification_target'))
             if changed:
+                allowed['guidance_json']=''
                 self.conn.execute('DELETE FROM goal_checks WHERE goal_id=?',(id,))
                 if old['completion_source']=='verified':allowed.update(state='todo',completed_at=None,completion_source='')
             if 'state' in allowed and allowed['state']!=old['state']:
@@ -596,6 +674,11 @@ class Meridian:
     def delete(self,table,id):
         if table not in ("goals","notes","decisions"):raise ValueError("Invalid item")
         with self.lock,self.conn:
+            if table=='goals':
+                row=self.conn.execute('SELECT suggestion_key FROM goals WHERE id=?',(id,)).fetchone()
+                if row and row['suggestion_key']:
+                    self.conn.execute("UPDATE suggestions SET decision='dismissed' WHERE key=?",(row['suggestion_key'],))
+                    self.conn.execute('DELETE FROM suggestion_preferences WHERE key=?',(row['suggestion_key'],))
             self.conn.execute(f"DELETE FROM {table} WHERE id=?",(id,))
             if table=='goals':self.conn.execute('DELETE FROM goal_checks WHERE goal_id=?',(id,))
 
@@ -626,7 +709,8 @@ class Meridian:
 
     def backup(self):
         data=self.snapshot()
-        return {"format":"meridian-backup-v1","exported_at":iso_now(),"goals":data["goals"],"notes":data["notes"],"decisions":data["decisions"],"web_analytics":data["web_analytics"]}
+        return {"format":"meridian-backup-v1","exported_at":iso_now(),"goals":data["goals"],"notes":data["notes"],"decisions":data["decisions"],"web_analytics":data["web_analytics"],
+                "suggestion_preferences":self.suggestions.preferences()}
 
     def restore(self,data):
         if data.get("format")!="meridian-backup-v1":raise ValueError("Not a Meridian backup")
@@ -637,15 +721,17 @@ class Meridian:
             self.conn.execute('DELETE FROM goal_checks')
             for table in ("goals","notes","decisions","web_analytics"):
                 self.conn.execute("DELETE FROM "+table)
-                cols={"goals":("project","title","priority","category","description","state","created_at","updated_at","completed_at","verification_kind","verification_target","completion_source"),"notes":("project","title","body","created_at"),"decisions":("project","title","reason","created_at"),"web_analytics":("project","date","visitors","pageviews")}[table]
+                cols={"goals":("project","title","priority","category","description","state","created_at","updated_at","completed_at","verification_kind","verification_target","completion_source","suggestion_key","suggestion_revision","guidance_json"),"notes":("project","title","body","created_at"),"decisions":("project","title","reason","created_at"),"web_analytics":("project","date","visitors","pageviews")}[table]
                 for row in data[table]:
                     if not isinstance(row,dict) or row.get("project") not in PROJECTS:raise ValueError("Invalid backup project")
                     if table=='goals':
                         row={**row,'verification_kind':row.get('verification_kind') or '', 'verification_target':row.get('verification_target') or '',
+                             'suggestion_key':str(row.get('suggestion_key') or '')[:300], 'suggestion_revision':str(row.get('suggestion_revision') or '')[:300], 'guidance_json':str(row.get('guidance_json') or '')[:16000],
                              'completion_source':'manual' if row.get('state')=='done' else ''}
                         self.validate_goal_rule(row)
                     values=[row.get(k) for k in cols]
                     self.conn.execute(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",values)
+            self.suggestions.restore_preferences(data.get('suggestion_preferences',[]))
 
     def close(self):
         self._stop.set()
@@ -655,7 +741,7 @@ class Meridian:
         with self.lock:self.conn.close()
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="Meridian/0.2.16"
+    server_version="Meridian/0.2.17"
     def log_message(self,format,*args):
         if not self.path.startswith('/api/state') and '/auth/verify' not in self.path:super().log_message(format,*args)
 
@@ -830,6 +916,8 @@ class Handler(BaseHTTPRequestHandler):
                 goal_id=body.get('goal_id')
                 if goal_id is not None and (type(goal_id) is not int or goal_id<1):raise ValueError('Invalid goal')
                 return self.reply({"started":self.app.refresh_async('all',verify=True,goal_id=goal_id,project_id=body.get('project'))})
+            if path=='/api/suggestions/action' and method=='POST':
+                return self.reply(self.app.suggestion_action(body.get('key'),body.get('action'),body.get('revision')))
             if path=="/api/updates/check" and method=="POST":return self.reply({"started":self.app.check_updates_async()})
             if path=="/api/analytics/import" and method=="POST":return self.reply({"imported":self.app.import_csv(body.get("csv",""),body.get("project",""))})
             if path=="/api/restore" and method=="POST":

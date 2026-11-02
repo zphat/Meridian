@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: '22'
       - name: Check Python code
-        run: python -m compileall -q meridian.py auth.py goal_guidance.py github_access.py tests/
+        run: python -m compileall -q meridian.py auth.py goal_guidance.py github_access.py suggestions.py tests/
       - name: Run all tests (offline, mocked email delivery)
         run: python -m unittest discover -s tests -v
       - name: Validate JavaScript entry points
@@ -26,6 +26,7 @@ jobs:
           node --check static/app.js
           node --check static/goals.js
           node --check static/connections.js
+          node --check static/suggestions.js
           node --check static/auth.js
       - name: Ensure private data is not committed
         run: |
