@@ -8,8 +8,9 @@ permissions:
   contents: read
 jobs:
   test:
-    # Match the supported OS for the pinned Playwright browser tooling.
+    # Use a stable image and its installed Chrome; avoid a second OS/browser install.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,11 +39,12 @@ jobs:
       - name: Check analytics calculations
         run: node tests/metrics.test.cjs
       - name: Install browser test tooling (not shipped)
-        run: |
-          npm install --no-save playwright@1.58.2
-          npx playwright install --with-deps chromium
+        run: npm install --no-save --ignore-scripts playwright@1.58.2
       - name: Verify real browser setup, sign-in, layouts and quiet behavior
-        run: node tests/browser_smoke.cjs
+        run: |
+          meridian_browser_path="$(command -v google-chrome)"
+          "$meridian_browser_path" --version
+          MERIDIAN_CHROME_EXECUTABLE="$meridian_browser_path" node tests/browser_smoke.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
