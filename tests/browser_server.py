@@ -21,6 +21,23 @@ class QuietHandler(Handler):
             self.server.meridian.github_access.state.update(reason='rate_limited',pause_until=time.time()+600,remaining=0,limit=60,reset_at=int(time.time()+600))
             self.server.meridian.github_access._persist()
             return self.reply({'ok':True})
+        if self.path.startswith('/__test/suggestions'):
+            app=self.server.meridian
+            project=next(p for p in app.snapshot()['projects'] if p['id']=='longitude')
+            data=copy.deepcopy(project['github']['data'])
+            if self.path.endswith('/offline'):
+                app._cache('github:longitude',None,'Temporary test connection failure')
+            else:
+                head='fixture-next-update' if self.path.endswith('/new-push') else 'fixture-editor-update'
+                run=dict(workflow_id=27,name='Windows editor release',head_sha=head,status='completed',conclusion='failure',created_at=iso_now(),html_url='https://github.com/zphat/Longitude/actions/runs/27')
+                data.update(head_sha=head,evidence_checked_at=iso_now(),workflows=[run],ci=run,
+                    commits=[dict(sha=head,message='Improve editor layout and export recovery',date=iso_now(),url='https://github.com/zphat/Longitude/commit/'+head)],
+                    issues=[dict(number=42,title='Review export colors',labels=['priority:medium'],body='<img src=x onerror="window.injected=true">',url='https://github.com/zphat/Longitude/issues/42')],
+                    roadmap=dict(status='ok',file='PROJECT_STATUS.md',open_items=['[low] Improve keyboard help'],checked_at=iso_now(),url='https://github.com/zphat/Longitude/blob/main/PROJECT_STATUS.md'),
+                    followups=dict(status='ok',checked_at=iso_now(),url='https://github.com/zphat/Longitude/blob/main/MERIDIAN_GOALS.json',items=[dict(id='narrow-editor',revision='1',title='Verify editor controls after the layout update',priority='high',reason='The new layout changes panel sizing. Test an actual editing session before considering it finished.',steps=['Open a real project in an 800-pixel window.','Resize panels, change text and export the result.'],acceptance=['Export and layer controls remain reachable.','The exported result matches the preview.'])]))
+                app._cache('github:longitude',data)
+            app.refresh_suggestions()
+            return self.reply({'ok':True})
         return super().do_POST()
 
 with tempfile.TemporaryDirectory() as data:

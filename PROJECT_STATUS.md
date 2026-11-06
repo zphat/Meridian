@@ -1,17 +1,18 @@
-# Meridian — 0.2.16
+# Meridian — 0.2.17
 
-This release reduces GitHub allowance exhaustion and separates daily goal completions from permanent history. Existing native startup recovery, detailed goal prompts, analytics and local data remain supported.
+Adds ranked, evidence-based suggestions while preserving the GitHub request budget, daily goal history, detailed repair prompts and native startup recovery.
 
 ## Behavior
 
-- All GitHub API reads share a serialized request queue, persistent response cache and retry state. Anonymous background polling is slower; explicit build/uptime verification still revalidates the proof. Permission failures, rejected credentials and rate limits remain distinguishable.
-- Settings provides optional, validated GitHub token setup. Tokens remain in a local credentials file, never in state responses or workspace exports. Only an authenticated local session can change credentials; failed replacement keeps the existing setting.
-- One rate-limit notice gives a local retry time and links to settings. Site probes and local planning remain usable while GitHub is paused.
-- Completed today follows the computer's calendar day. Previous completions move into history without deleting goals or evidence. Local midnight, daylight-saving transitions, unchanged-state responses, reopening and repeated verification are covered.
-- New-goal generation remains a future choice: ranked evidence-based suggestions, capped automatic additions, or optional AI prioritization. This release does not silently create extra goals or call an AI service.
+- Suggestions have project and status filters, priority order, source evidence, a detailed plan, and explicit Add to goals / Reopen goal actions. Existing matching work is reused. Snooze and dismissal are reversible and persist locally.
+- Current-commit build failures, fresh endpoint and scheduled-monitor failures, certificate expiry, labelled issues and unchecked roadmap items supply useful signals. Old builds, stale data, cancelled/skipped runs and rate-limit errors do not invent new failures.
+- Recent pushes can propose focused regression reviews. Specific findings from an update can travel with the source in MERIDIAN_GOALS.json; see [the follow-up guide](docs/suggestions.md). Commit messages and repository-authored plans are labelled as hints requiring verification.
+- Accepted goals retain their checklist and relevant automatic verification rule. Completion suppresses the same proposal. A new incident, push or explicitly revised follow-up can offer reopening without silently changing the user's completed work.
+- Unavailable sources keep earlier suggestions visibly stale; adoption requires fresh evidence. A disappearing feed item is not proof that a goal was completed.
+- No AI service, runtime dependency, webhook, or extra polling process. Optional follow-up files are pinned to commits and cached across restarts. Source reads reuse existing GitHub/endpoint scheduling.
 
-## Verification scope
+## Verification
 
-Offline backend regressions, date/analytics calculation checks and browser workflows cover cache persistence, conditional requests, shared backoff, token validation and confidentiality, local-only credential changes, midnight rollover, completion history and reopening. Existing Windows tests cover five installed native launches, forced blank-page recovery, sign-in, upgrade preservation and rollback. Linux installers are built and installed separately.
+Backend regressions cover ranking, current-commit evidence, stale/unavailable sources, follow-up validation, duplicate prevention, dismissal/snooze persistence, recurring failures, goal guidance, restore atomicity, cross-installation backup restoration and pinned-document caching. Browser checks cover the full suggestion flow at three widths alongside auth, goal verification, GitHub token handling and midnight history rollover.
 
-Live GitHub quotas depend on the owner's network/account. Automated token tests use fake credentials and mock responses. Device-only recording checks and private server backups still require their specific evidence.
+Windows CI builds and installs the packaged application, exercises repeated native WebView2 launches and deliberate blank-page recovery, and verifies upgrade preservation and rollback. Linux installers are built and installed separately. Live device-only and private-server tests continue to require their specific evidence.

@@ -57,7 +57,7 @@ async function nativeCheck(label,{retry=false,fullFlow=false}={}){
    await page.locator('#email-code').fill('13572468');
    await page.locator('#confirm-code').click();
    await page.locator('#page h1').waitFor();
-   for(const route of ['overview','analytics','settings']){
+   for(const route of ['overview','suggestions','analytics','settings']){
     await page.evaluate(x=>location.hash=x,route);
     await page.waitForFunction(x=>document.querySelector('#crumb-current').textContent.toLowerCase()===x,route);
    }

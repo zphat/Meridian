@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "suggestions": [
+    {
+      "id": "editor-small-window",
+      "revision": "1",
+      "state": "open",
+      "title": "Verify editor controls in a small Windows window",
+      "priority": "high",
+      "reason": "Panel sizing changed in this update. Automated layout checks passed; a real editing session still needs testing.",
+      "steps": [
+        "Open a saved project at 800 × 600.",
+        "Resize panels, edit text, undo the change, and export."
+      ],
+      "acceptance": [
+        "All required controls remain reachable.",
+        "The exported result matches the preview and saved work is preserved."
+      ]
+    }
+  ]
+}

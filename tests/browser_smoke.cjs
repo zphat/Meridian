@@ -33,7 +33,7 @@ fs.mkdirSync(output,{recursive:true});
   // Every page fits both a small desktop window and a phone width.
   for(const width of [1280,800,390]){
    await page.setViewportSize({width,height:850});
-   for(const view of ['overview','latitude','longitude','sundial','activity','completed','analytics','settings']){
+   for(const view of ['overview','latitude','longitude','sundial','activity','suggestions','completed','analytics','settings']){
     await page.evaluate(view=>{location.hash=view},view);
     await page.waitForFunction(view=>document.querySelector('#crumb-current').textContent.toLowerCase()===(view==='overview'?'overview':view),view);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`${view} overflows at ${width}px`);
@@ -109,6 +109,74 @@ fs.mkdirSync(output,{recursive:true});
   await page.screenshot({path:path.join(output,'goals.png'),fullPage:true});
   await page.reload();await page.locator('#page h1').waitFor();
   assert.equal(await page.evaluate(id=>model.goals.find(g=>g.id===id).check.state,custom.id),'verified');
+  // Ranked suggestions: real source reasons, review before adding, no duplicate goals.
+  await page.request.post('http://127.0.0.1:'+port+'/__test/suggestions');
+  await page.evaluate(async()=>{location.hash='suggestions';await load(true)});
+  await page.locator('#suggestion-project').selectOption('longitude');
+  const suggestion=key=>page.locator(`[data-suggestion-key="${key}"]`);
+  await suggestion('longitude:build:27').waitFor();
+  assert.match(await page.locator('.suggestion-card').first().textContent(),/Windows editor release/);
+  const followup=suggestion('longitude:followup:narrow-editor');
+  await followup.locator('summary').click();
+  assert.match(await followup.textContent(),/Export and layer controls remain reachable/);
+  for(const width of [1280,800,390]){
+   await page.setViewportSize({width,height:850});
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`Suggestions overflow at ${width}px`);
+  }
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({path:path.join(output,'suggestions-mobile.png'),fullPage:true});
+  await page.setViewportSize({width:1280,height:850});
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({path:path.join(output,'suggestions.png'),fullPage:true});
+  await followup.locator('[data-suggestion-prompt]').click();
+  assert.match(await page.locator('#prompt-backdrop textarea').inputValue(),/800-pixel window/);
+  assert.match(await page.locator('#prompt-backdrop textarea').inputValue(),/MERIDIAN_GOALS.json/);
+  await page.keyboard.press('Escape');
+  const goalsBefore=await page.evaluate(()=>model.goals.length);
+  await suggestion('longitude:build:27').locator('[data-suggestion-action="add"]').click();
+  await page.locator('#goal-review-backdrop').waitFor();
+  assert.match(await page.locator('#goal-review-backdrop').textContent(),/first failing step/);
+  assert.equal(await page.evaluate(()=>model.goals.length),goalsBefore+1);
+  const buildSuggestion=await page.evaluate(()=>model.suggestions.find(s=>s.key==='longitude:build:27'));
+  const repeat=await page.request.post('http://127.0.0.1:'+port+'/api/suggestions/action',{data:{key:buildSuggestion.key,revision:buildSuggestion.revision,action:'add'}});
+  assert.equal((await repeat.json()).goal_id,buildSuggestion.goal_id);
+  await page.keyboard.press('Escape');
+  await page.locator('[data-suggestion-view="tracked"]').click();
+  assert.ok(await suggestion('longitude:build:27').locator('[data-review-goal]').isVisible());
+  await page.locator('[data-suggestion-view="pending"]').click();
+  await followup.locator('[data-suggestion-action="snooze"]').click();
+  await page.waitForFunction(()=>model.suggestions.find(s=>s.key==='longitude:followup:narrow-editor').state==='snoozed');
+  await suggestion('longitude:issue:42').locator('[data-suggestion-action="dismiss"]').click();
+  await page.waitForFunction(()=>model.suggestions.find(s=>s.key==='longitude:issue:42').state==='dismissed');
+  await page.reload();await page.locator('#suggestion-project').waitFor();
+  await page.locator('[data-suggestion-view="later"]').click();
+  assert.ok(await suggestion('longitude:issue:42').isVisible());
+  assert.ok(await followup.isVisible());
+  await followup.locator('[data-suggestion-action="restore"]').click();
+  await page.waitForFunction(()=>model.suggestions.find(s=>s.key==='longitude:followup:narrow-editor').state==='pending');
+  await page.locator('[data-suggestion-view="pending"]').click();
+  // Completing a review suppresses the same push; a newer push offers explicit reopening.
+  await suggestion('longitude:update-review').locator('[data-suggestion-action="add"]').click();
+  await page.locator('#goal-review-backdrop [data-goal-manual]').click();
+  await page.waitForFunction(()=>model.suggestions.find(s=>s.key==='longitude:update-review').state==='completed');
+  await page.request.post('http://127.0.0.1:'+port+'/__test/suggestions/new-push');
+  await page.evaluate(()=>load(true));
+  await suggestion('longitude:update-review').getByRole('button',{name:'Reopen goal',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>model.goals.length),goalsBefore+2);
+  await page.locator('[data-suggestion-view="tracked"]').click();
+  await suggestion('longitude:build:27').getByRole('button',{name:'Update goal plan',exact:true}).click();
+  await page.locator('#goal-review-backdrop').waitFor();
+  assert.match(await page.locator('#goal-review-backdrop').textContent(),/fixture-next-update/);
+  assert.equal(await page.evaluate(()=>model.goals.length),goalsBefore+2);
+  await page.keyboard.press('Escape');
+  await page.locator('[data-suggestion-view="pending"]').click();
+  await page.request.post('http://127.0.0.1:'+port+'/__test/suggestions/offline');
+  await page.evaluate(()=>load(true));
+  assert.equal(await followup.locator('[data-suggestion-action="add"]').isDisabled(),true);
+  assert.match(await followup.textContent(),/Refresh needed/);
+  assert.equal(await page.evaluate(()=>window.injected),undefined);
+  await page.request.post('http://127.0.0.1:'+port+'/__test/suggestions/new-push');
+  await page.evaluate(()=>load(true));
   // One clear allowance notice, local token setup, and secret-free API state.
   await page.request.post('http://127.0.0.1:'+port+'/__test/github-limit');
   await page.evaluate(async()=>{location.hash='overview';await load(true)});
@@ -157,7 +225,8 @@ fs.mkdirSync(output,{recursive:true});
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.dispatchEvent(new Event('visibilitychange'));});
   await page.locator('#lock-button').click();await page.locator('#heading').waitFor();
   assert.equal((await page.request.get('http://127.0.0.1:'+port+'/api/state')).status(),401);
+  assert.equal((await page.request.post('http://127.0.0.1:'+port+'/api/suggestions/action',{data:{key:'longitude:build:27',action:'add',revision:'unknown'}})).status(),401);
   assert.deepEqual(pageErrors,[]);
-  console.log('Browser checks passed: setup, code recovery, wrong/correct code, all routes at 3 widths, analytics filters, quiet mode, note save, detailed repair prompt and copy, fresh verification, regression reopening, evidence modals, manual-check honesty, rule editing, persisted results, GitHub rate notice and token setup/recovery, local midnight completion history, unchanged-state reuse, hidden polling, lock.');
+  console.log('Browser checks passed: setup, code recovery, wrong/correct code, all routes at 3 widths, analytics filters, quiet mode, note save, detailed repair prompt and copy, fresh verification, regression reopening, evidence modals, manual-check honesty, rule editing, persisted results, ranked suggestions, source plans, duplicate prevention, snooze/dismiss persistence, post-push reopening, stale evidence, GitHub rate notice and token setup/recovery, local midnight completion history, unchanged-state reuse, hidden polling, lock.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

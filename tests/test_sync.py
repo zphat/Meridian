@@ -10,6 +10,7 @@ class SyncTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.app=Meridian(self.tmp.name,start_worker=False)
+        self.app._followups=lambda *args:{"status":"missing","items":[]}
     def tearDown(self):
         self.app.close();self.tmp.cleanup()
     def test_live_github_collection_and_dedup(self):
